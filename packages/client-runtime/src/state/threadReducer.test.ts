@@ -305,6 +305,80 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.modelSelection).toEqual(baseThread.modelSelection);
       }
     });
+
+    it("patches taskDetails without touching other fields", () => {
+      const result = applyThreadDetailEvent(
+        { ...baseThread, workflowPreset: "review" },
+        {
+          ...baseEventFields,
+          sequence: 5,
+          occurredAt: "2026-04-01T05:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            taskDetails: "Ship the board",
+            updatedAt: "2026-04-01T05:00:00.000Z",
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.taskDetails).toBe("Ship the board");
+        expect(result.thread.workflowPreset).toBe("review");
+        expect(result.thread.title).toBe(baseThread.title);
+      }
+    });
+
+    it("clears taskDetails when the payload carries null", () => {
+      const result = applyThreadDetailEvent(
+        { ...baseThread, taskDetails: "Ship the board" },
+        {
+          ...baseEventFields,
+          sequence: 5,
+          occurredAt: "2026-04-01T05:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            taskDetails: null,
+            updatedAt: "2026-04-01T05:00:00.000Z",
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.taskDetails).toBeNull();
+      }
+    });
+
+    it("leaves taskDetails alone when the payload omits it", () => {
+      const result = applyThreadDetailEvent(
+        { ...baseThread, taskDetails: "Ship the board" },
+        {
+          ...baseEventFields,
+          sequence: 5,
+          occurredAt: "2026-04-01T05:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            title: "Updated Title",
+            updatedAt: "2026-04-01T05:00:00.000Z",
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.taskDetails).toBe("Ship the board");
+      }
+    });
   });
 
   describe("thread.message-sent", () => {

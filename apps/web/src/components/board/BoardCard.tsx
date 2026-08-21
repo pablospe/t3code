@@ -11,7 +11,6 @@ import {
 import { memo, useMemo, useState } from "react";
 
 import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
-import { boardTaskMetaKey, useBoardTaskMetaStore } from "~/boardTaskMetaStore";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -35,7 +34,7 @@ const ACTION_BUTTON_CLASS =
 
 /** A per-task workflow is worth naming in the tooltip: it changes what every
     drop on this card sends. */
-function presetLabelPrefix(presetId: string | undefined): string {
+function presetLabelPrefix(presetId: string | null | undefined): string {
   if (!presetId) return "";
   const preset = BOARD_PROMPT_PRESETS.find((candidate) => candidate.id === presetId);
   return preset ? `[${preset.label}] ` : "";
@@ -57,13 +56,10 @@ function BoardCardBody({
     thread.updatedAt,
     thread.createdAt,
   );
-  // Task details are client-local, so the card reveals them on hover rather
-  // than spending card height on text only this device has.
-  const meta = useBoardTaskMetaStore(
-    (state) => state.metaByThreadKey[boardTaskMetaKey(thread.environmentId, thread.id)],
-  );
-  const detailsTooltip = meta?.details
-    ? `${presetLabelPrefix(meta.presetId)}${meta.details}`
+  // Task details can run long, so the card reveals them on hover rather than
+  // spending card height on text the board does not need to read.
+  const detailsTooltip = thread.taskDetails
+    ? `${presetLabelPrefix(thread.workflowPreset)}${thread.taskDetails}`
     : null;
   return (
     <>

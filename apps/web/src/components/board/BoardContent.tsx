@@ -16,12 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 
-import { useBoardPromptsStore } from "~/boardPromptsStore";
-import {
-  boardTaskMetaKey,
-  resolvePromptsForThread,
-  useBoardTaskMetaStore,
-} from "~/boardTaskMetaStore";
+import { resolvePromptsForThread, useBoardPromptsStore } from "~/boardPromptsStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { useThreadActions } from "~/hooks/useThreadActions";
@@ -194,10 +189,11 @@ export function BoardContent({
     confirmAndDeleteThread,
   } = useThreadActions();
   const boardPrompts = useBoardPromptsStore((state) => state.prompts);
-  const taskMeta = useBoardTaskMetaStore((state) => state.metaByThreadKey);
-  const setTaskMeta = useBoardTaskMetaStore((state) => state.setTaskMeta);
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const [backlogDialogOpen, setBacklogDialogOpen] = useState(false);
   const [activeDrag, setActiveDrag] = useState<{
     thread: SidebarThreadSummary;
@@ -455,29 +451,29 @@ export function BoardContent({
       const busy = thread.session?.status === "running" || thread.session?.status === "starting";
       if (busy) return;
       // A task picked its own workflow at creation time; otherwise the board's.
-      const meta = taskMeta[boardTaskMetaKey(thread.environmentId, thread.id)];
-      const prompts = resolvePromptsForThread(meta, boardPrompts);
+      const details = thread.taskDetails ?? undefined;
+      const prompts = resolvePromptsForThread(thread.workflowPreset, boardPrompts);
       if (from === "backlog" && target === "planning") {
-        startThreadTurn(thread, prompts.backlogToPlanning, "plan", meta?.details);
+        startThreadTurn(thread, prompts.backlogToPlanning, "plan", details);
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "planning") {
-        startThreadTurn(thread, prompts.reviewToPlanning, "plan", meta?.details);
+        startThreadTurn(thread, prompts.reviewToPlanning, "plan", details);
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "running") {
-        startThreadTurn(thread, prompts.reviewToRunning, "default", meta?.details);
+        startThreadTurn(thread, prompts.reviewToRunning, "default", details);
         pinColumn(thread, "running");
         return;
       }
       if (from === "planning" && target === "running") {
-        startThreadTurn(thread, prompts.planningToRunning, "default", meta?.details);
+        startThreadTurn(thread, prompts.planningToRunning, "default", details);
         pinColumn(thread, "running");
       }
     },
-    [activeDrag, settle, unsettle, startThreadTurn, pinColumn, boardPrompts, taskMeta],
+    [activeDrag, settle, unsettle, startThreadTurn, pinColumn, boardPrompts],
   );
 
   // A single-project scope pins the new task to it; otherwise the contextual
@@ -530,8 +526,8 @@ export function BoardContent({
   const createBacklogTask = useCallback(
     ({ title, details, presetId }: BoardBacklogTaskDraft) => {
       if (!newTaskProject || !newTaskModelSelection) return;
-      // The id is minted here so the task's client-local metadata can attach
-      // to the thread the create command is about to produce.
+      // The id is minted here so the task's board fields can be patched onto
+      // the thread the create command is about to produce.
       const threadId = newThreadId();
       void createThread({
         environmentId: newTaskProject.environmentId,
@@ -546,14 +542,20 @@ export function BoardContent({
           worktreePath: null,
         },
       });
-      if (details || presetId) {
-        setTaskMeta(boardTaskMetaKey(newTaskProject.environmentId, threadId), {
-          details: details || undefined,
-          presetId: presetId ?? undefined,
-        });
-      }
+      const trimmedDetails = details?.trim();
+      // Nothing to say means no second command: a bare task rides the create
+      // alone rather than a no-op meta update.
+      if (!trimmedDetails && !presetId) return;
+      void updateThreadMetadata({
+        environmentId: newTaskProject.environmentId,
+        input: {
+          threadId,
+          ...(trimmedDetails ? { taskDetails: trimmedDetails } : {}),
+          ...(presetId ? { workflowPreset: presetId } : {}),
+        },
+      });
     },
-    [createThread, newTaskProject, newTaskModelSelection, setTaskMeta],
+    [createThread, updateThreadMetadata, newTaskProject, newTaskModelSelection],
   );
 
   if (!bootstrapped && threads.length === 0) {

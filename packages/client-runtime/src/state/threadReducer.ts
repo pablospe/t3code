@@ -94,6 +94,8 @@ export function applyThreadDetailEvent(
           settledAt: null,
           snoozedUntil: null,
           snoozedAt: null,
+          taskDetails: null,
+          workflowPreset: null,
           deletedAt: null,
           messages: [],
           proposedPlans: [],
@@ -217,6 +219,12 @@ export function applyThreadDetailEvent(
           ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
+            : {}),
+          ...(event.payload.taskDetails !== undefined
+            ? { taskDetails: event.payload.taskDetails }
+            : {}),
+          ...(event.payload.workflowPreset !== undefined
+            ? { workflowPreset: event.payload.workflowPreset }
             : {}),
           updatedAt: event.payload.updatedAt,
         },

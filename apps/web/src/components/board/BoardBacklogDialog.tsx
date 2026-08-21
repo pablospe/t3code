@@ -35,7 +35,8 @@ const WORKFLOW_OPTIONS: ReadonlyArray<{ id: string | null; label: string }> = [
 
 /** Creates a card that sits in Backlog: the thread exists server-side from
     the moment it is named, but no turn starts until it is dragged out. Details
-    and workflow ride along client-side (see boardTaskMetaStore). */
+    and workflow persist on the thread itself (taskDetails / workflowPreset), so
+    every client sees the same card. */
 export function BoardBacklogDialog({
   open,
   onOpenChange,

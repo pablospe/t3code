@@ -89,6 +89,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           has_actionable_proposed_plan,
           pinned_at,
           pin_order_key,
+          task_details,
+          workflow_preset,
           created_at,
           updated_at,
           deleted_at
@@ -109,6 +111,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           0,
           '2026-02-24T00:00:01.000Z',
           'gm',
+          'Ship the board',
+          'openspec',
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
           NULL
@@ -325,6 +329,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedAt: null,
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
+          taskDetails: "Ship the board",
+          workflowPreset: "openspec",
           titleRegeneration: null,
           deletedAt: null,
           messages: [
@@ -444,6 +450,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedAt: null,
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
+          taskDetails: "Ship the board",
+          workflowPreset: "openspec",
           titleRegeneration: null,
           session: {
             threadId: ThreadId.make("thread-1"),

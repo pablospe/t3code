@@ -73,6 +73,16 @@ export const BOARD_PROMPT_PRESETS: ReadonlyArray<{
   },
 ];
 
+/** A task's own preset wins over the board-wide prompts; an id that no longer
+    resolves (preset removed since it was chosen) falls back to global. */
+export function resolvePromptsForThread(
+  presetId: string | null | undefined,
+  globalPrompts: Record<BoardTransitionPromptKey, string>,
+): Record<BoardTransitionPromptKey, string> {
+  if (!presetId) return globalPrompts;
+  return BOARD_PROMPT_PRESETS.find((preset) => preset.id === presetId)?.prompts ?? globalPrompts;
+}
+
 interface BoardPromptsState {
   prompts: Record<BoardTransitionPromptKey, string>;
   setPrompt: (key: BoardTransitionPromptKey, prompt: string) => void;
