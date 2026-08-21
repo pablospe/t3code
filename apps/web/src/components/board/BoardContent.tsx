@@ -107,7 +107,7 @@ function BoardColumnSection({
     this. Project scope follows the sidebar's own selector (via
     projectScopeStore) - the board deliberately has no selector of its own.
     Navigation uses the router root so it works from any route. */
-export function BoardContent() {
+export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const threads = useThreadShells();
   const projects = useProjects();
@@ -234,7 +234,13 @@ export function BoardContent() {
       onDragCancel={() => setActiveDrag(null)}
     >
       {/* Columns scroll horizontally in their own container; the host never does. */}
-      <div className="flex h-full min-h-0 gap-3 overflow-x-auto p-4">
+      <div
+        className={
+          compact
+            ? "flex h-full min-h-0 gap-2 overflow-x-auto p-2 pb-2.5"
+            : "flex h-full min-h-0 gap-3 overflow-x-auto p-4"
+        }
+      >
         {columns.map((column) => (
           <BoardColumnSection
             key={column.definition.key}

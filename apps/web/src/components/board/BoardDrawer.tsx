@@ -63,7 +63,7 @@ export function BoardDrawer() {
         className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-row-resize"
       />
       <div className="h-full min-h-0">
-        <BoardContent />
+        <BoardContent compact />
       </div>
     </aside>
   );
