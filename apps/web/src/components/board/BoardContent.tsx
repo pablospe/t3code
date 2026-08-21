@@ -18,6 +18,7 @@ import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environ
 
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { useThreadActions } from "~/hooks/useThreadActions";
+import { useProjectScopeStore } from "~/projectScopeStore";
 import {
   useAllEnvironmentShellsBootstrapped,
   useProjects,
@@ -53,7 +54,7 @@ function BoardColumnSection({
   return (
     <section
       ref={setNodeRef}
-      className={`flex h-full w-72 shrink-0 flex-col rounded-xl bg-accent/30 ${
+      className={`flex h-full min-w-64 flex-1 basis-0 flex-col rounded-xl bg-accent/30 ${
         isOver ? "ring-1 ring-ring" : ""
       }`}
     >
@@ -103,19 +104,15 @@ function BoardColumnSection({
 }
 
 /** The board itself, host-agnostic: the full page and the drawer both render
-    this, passing their own project scope. Navigation uses the router root so
-    it works from any route. */
-export function BoardContent({
-  project,
-  environment,
-}: {
-  project?: ProjectId | undefined;
-  environment?: EnvironmentId | undefined;
-}) {
+    this. Project scope follows the sidebar's own selector (via
+    projectScopeStore) - the board deliberately has no selector of its own.
+    Navigation uses the router root so it works from any route. */
+export function BoardContent() {
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const threads = useThreadShells();
   const projects = useProjects();
   const navigate = useNavigate();
+  const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
   const { handleNewThread, defaultProjectRef } = useHandleNewThread();
   const { settleThread, unsettleThread, snoozeThread } = useThreadActions();
   const [activeDrag, setActiveDrag] = useState<SidebarThreadSummary | null>(null);
@@ -125,14 +122,12 @@ export function BoardContent({
 
   const filteredThreads = useMemo(
     () =>
-      project
-        ? threads.filter(
-            (thread) =>
-              thread.projectId === project &&
-              (!environment || thread.environmentId === environment),
-          )
-        : threads,
-    [threads, project, environment],
+      scopedProjectKeys === null
+        ? threads
+        : threads.filter((thread) =>
+            scopedProjectKeys.has(boardKey(thread.environmentId, thread.projectId)),
+          ),
+    [threads, scopedProjectKeys],
   );
 
   const projectTitles = useMemo(() => {
@@ -206,10 +201,21 @@ export function BoardContent({
   );
 
   const newThreadInScope = useCallback(() => {
-    const projectRef =
-      project && environment ? scopeProjectRef(environment, project) : defaultProjectRef;
+    // A single-project scope pins the new draft to it; otherwise the
+    // contextual default project decides, same as the sidebar's new-thread.
+    let projectRef = defaultProjectRef;
+    if (scopedProjectKeys?.size === 1) {
+      const [onlyKey] = scopedProjectKeys;
+      if (onlyKey) {
+        const separator = onlyKey.indexOf(":");
+        projectRef = scopeProjectRef(
+          onlyKey.slice(0, separator) as EnvironmentId,
+          onlyKey.slice(separator + 1) as ProjectId,
+        );
+      }
+    }
     if (projectRef) void handleNewThread(projectRef);
-  }, [project, environment, defaultProjectRef, handleNewThread]);
+  }, [scopedProjectKeys, defaultProjectRef, handleNewThread]);
 
   if (!bootstrapped && threads.length === 0) {
     return (
