@@ -53,6 +53,7 @@ function BoardColumnSection({
   column,
   dragFrom,
   dragReturn,
+  selectedThreadKey,
   projectTitles,
   onOpen,
   onSettle,
@@ -70,6 +71,8 @@ function BoardColumnSection({
   dragFrom: BoardColumnKey | null;
   /** For drags out of Done: the single column unsettling really returns to. */
   dragReturn: BoardColumnKey | null;
+  /** boardKey of the thread open in the main view, highlighted like the sidebar row. */
+  selectedThreadKey: string | null;
   projectTitles: ReadonlyMap<string, string>;
   onOpen: (thread: SidebarThreadSummary) => void;
   onSettle: (thread: SidebarThreadSummary) => void;
@@ -138,6 +141,10 @@ function BoardColumnSection({
           <BoardCard
             key={boardKey(thread.environmentId, thread.id)}
             thread={thread}
+            selected={
+              selectedThreadKey !== null &&
+              boardKey(thread.environmentId, thread.id) === selectedThreadKey
+            }
             column={column.definition.key}
             projectTitle={
               projectTitles.get(boardKey(thread.environmentId, thread.projectId)) ??
@@ -179,7 +186,7 @@ export function BoardContent({
   const navigate = useNavigate();
   const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
   const scope = scopeOverride !== undefined ? scopeOverride : scopedProjectKeys;
-  const { defaultProjectRef } = useHandleNewThread();
+  const { defaultProjectRef, routeThreadRef } = useHandleNewThread();
   const {
     settleThread,
     unsettleThread,
@@ -594,6 +601,11 @@ export function BoardContent({
               dragFrom={activeDrag?.column ?? null}
               dragReturn={
                 activeDrag?.column === "done" ? resolveDoneReturnColumn(activeDrag.thread) : null
+              }
+              selectedThreadKey={
+                routeThreadRef
+                  ? boardKey(routeThreadRef.environmentId, routeThreadRef.threadId)
+                  : null
               }
               projectTitles={projectTitles}
               onOpen={openThread}

@@ -122,6 +122,7 @@ function BoardCardImpl({
   projectTitle,
   column,
   now,
+  selected = false,
   onOpen,
   onSettle,
   onUnsettle,
@@ -135,6 +136,8 @@ function BoardCardImpl({
   projectTitle: string;
   column: BoardColumnKey;
   now: number;
+  /** The thread open in the main view, highlighted like the sidebar row. */
+  selected?: boolean;
   onOpen: (thread: SidebarThreadSummary) => void;
   onSettle: (thread: SidebarThreadSummary) => void;
   onUnsettle: (thread: SidebarThreadSummary) => void;
@@ -176,6 +179,7 @@ function BoardCardImpl({
       ref={setNodeRef}
       role="button"
       tabIndex={0}
+      aria-current={selected ? "true" : undefined}
       onClick={() => onOpen(thread)}
       onKeyDown={(event) => {
         if (event.key === "Enter" && event.target === event.currentTarget) onOpen(thread);
@@ -188,7 +192,10 @@ function BoardCardImpl({
       {...listeners}
       className={cn(
         CARD_FRAME_CLASS,
-        "group/board-card relative transition-colors hover:bg-accent/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        "group/board-card relative transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        // Same treatment as the sidebar's active row: the open thread's card
+        // stays lit; everything else lights on hover only.
+        selected ? "bg-sidebar-row-selected border-ring/40" : "hover:bg-accent/60",
         // Offscreen cards skip style, layout and paint; a tall column costs
         // what the viewport shows. The intrinsic size keeps scrolling honest.
         "[contain-intrinsic-block-size:72px] [content-visibility:auto]",
