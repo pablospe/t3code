@@ -53,10 +53,31 @@ export const DEFAULT_BOARD_PROMPTS: Record<BoardTransitionPromptKey, string> = {
     "Resume: continue the implementation, completing anything unfinished and addressing any feedback raised in this thread.",
 };
 
+/** Whole-workflow prompt sets, so switching a board to a spec-driven flow is
+    one click rather than four edits. */
+export const BOARD_PROMPT_PRESETS: ReadonlyArray<{
+  id: string;
+  label: string;
+  prompts: Record<BoardTransitionPromptKey, string>;
+}> = [
+  { id: "default", label: "Default", prompts: DEFAULT_BOARD_PROMPTS },
+  {
+    id: "openspec",
+    label: "OpenSpec",
+    prompts: {
+      backlogToPlanning: "/opsx:propose {title}",
+      planningToRunning: "/opsx:apply",
+      reviewToPlanning: "/opsx:propose {title}",
+      reviewToRunning: "/opsx:apply",
+    },
+  },
+];
+
 interface BoardPromptsState {
   prompts: Record<BoardTransitionPromptKey, string>;
   setPrompt: (key: BoardTransitionPromptKey, prompt: string) => void;
   resetPrompt: (key: BoardTransitionPromptKey) => void;
+  applyPreset: (id: string) => void;
 }
 
 export const useBoardPromptsStore = create<BoardPromptsState>()(
@@ -69,6 +90,11 @@ export const useBoardPromptsStore = create<BoardPromptsState>()(
         set((state) => ({
           prompts: { ...state.prompts, [key]: DEFAULT_BOARD_PROMPTS[key] },
         })),
+      applyPreset: (id) => {
+        const preset = BOARD_PROMPT_PRESETS.find((candidate) => candidate.id === id);
+        if (!preset) return;
+        set({ prompts: { ...preset.prompts } });
+      },
     }),
     {
       name: "t3code:board-prompts:v1",

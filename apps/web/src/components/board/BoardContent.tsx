@@ -31,7 +31,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import type { SidebarThreadSummary } from "~/types";
 
-import { cn, newMessageId } from "~/lib/utils";
+import { cn, newMessageId, newThreadId } from "~/lib/utils";
 
 import type { SnoozePreset } from "../Sidebar.snooze";
 import {
@@ -42,7 +42,9 @@ import {
   resolveBoardColumn,
   resolveDoneReturnColumn,
 } from "./boardColumns.logic";
+import { BoardBacklogDialog } from "./BoardBacklogDialog";
 import { BoardCard, type BoardCardDragData, BoardCardPreview } from "./BoardCard";
+import { BoardPromptsEditor } from "./BoardPromptsEditor";
 
 const boardKey = (environmentId: string, id: string) => `${environmentId}:${id}`;
 
@@ -108,8 +110,8 @@ function BoardColumnSection({
           {onNewThread ? (
             <button
               type="button"
-              aria-label="New thread"
-              title="New thread"
+              aria-label="New backlog task"
+              title="New backlog task"
               onClick={onNewThread}
               className="flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
             >
@@ -163,15 +165,20 @@ function BoardColumnSection({
 
 /** The board itself, host-agnostic: the full page and the drawer both render
     this. Project scope follows the sidebar's own selector (via
-    projectScopeStore) - the board deliberately has no selector of its own.
-    Navigation uses the router root so it works from any route. */
-export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
+    projectScopeStore) unless the host passes an override - the board
+    deliberately has no selector of its own. Navigation uses the router root so
+    it works from any route. */
+export function BoardContent({
+  compact = false,
+  scopeOverride,
+}: { compact?: boolean; scopeOverride?: ReadonlySet<string> | undefined } = {}) {
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const threads = useThreadShells();
   const projects = useProjects();
   const navigate = useNavigate();
   const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
-  const { handleNewThread, defaultProjectRef } = useHandleNewThread();
+  const scope = scopeOverride !== undefined ? scopeOverride : scopedProjectKeys;
+  const { defaultProjectRef } = useHandleNewThread();
   const {
     settleThread,
     unsettleThread,
@@ -182,6 +189,8 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   } = useThreadActions();
   const boardPrompts = useBoardPromptsStore((state) => state.prompts);
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const [backlogDialogOpen, setBacklogDialogOpen] = useState(false);
   const [activeDrag, setActiveDrag] = useState<{
     thread: SidebarThreadSummary;
     column: BoardColumnKey;
@@ -207,12 +216,10 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
 
   const filteredThreads = useMemo(
     () =>
-      scopedProjectKeys === null
+      scope === null
         ? threads
-        : threads.filter((thread) =>
-            scopedProjectKeys.has(boardKey(thread.environmentId, thread.projectId)),
-          ),
-    [threads, scopedProjectKeys],
+        : threads.filter((thread) => scope.has(boardKey(thread.environmentId, thread.projectId))),
+    [threads, scope],
   );
 
   const projectTitles = useMemo(() => {
@@ -378,7 +385,9 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
           message: {
             messageId: newMessageId(),
             role: "user",
-            text,
+            // Prompts address a card by name: "{title}" is the only
+            // placeholder, so a prompt can carry the task into a slash command.
+            text: text.replaceAll("{title}", thread.title),
             attachments: [],
           },
           runtimeMode: thread.runtimeMode ?? "auto",
@@ -455,12 +464,12 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
     [activeDrag, settle, unsettle, startThreadTurn, pinColumn, boardPrompts],
   );
 
-  const newThreadInScope = useCallback(() => {
-    // A single-project scope pins the new draft to it; otherwise the
-    // contextual default project decides, same as the sidebar's new-thread.
+  // A single-project scope pins the new task to it; otherwise the contextual
+  // default project decides, same as the sidebar's new-thread.
+  const newTaskProject = useMemo(() => {
     let projectRef = defaultProjectRef;
-    if (scopedProjectKeys?.size === 1) {
-      const [onlyKey] = scopedProjectKeys;
+    if (scope?.size === 1) {
+      const [onlyKey] = scope;
       if (onlyKey) {
         const separator = onlyKey.indexOf(":");
         projectRef = scopeProjectRef(
@@ -469,8 +478,58 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
         );
       }
     }
-    if (projectRef) void handleNewThread(projectRef);
-  }, [scopedProjectKeys, defaultProjectRef, handleNewThread]);
+    if (!projectRef) return null;
+    return (
+      projects.find(
+        (project) =>
+          project.id === projectRef.projectId && project.environmentId === projectRef.environmentId,
+      ) ?? null
+    );
+  }, [scope, defaultProjectRef, projects]);
+
+  // A backlog thread is created without a turn, so it still needs a model on
+  // it: the project default, else whatever the user last worked with.
+  const newTaskModelSelection = useMemo(() => {
+    if (newTaskProject?.defaultModelSelection) return newTaskProject.defaultModelSelection;
+    let latestInProject: SidebarThreadSummary | null = null;
+    let latestAnywhere: SidebarThreadSummary | null = null;
+    for (const thread of threads) {
+      if (latestAnywhere === null || thread.updatedAt > latestAnywhere.updatedAt) {
+        latestAnywhere = thread;
+      }
+      if (
+        newTaskProject &&
+        thread.projectId === newTaskProject.id &&
+        thread.environmentId === newTaskProject.environmentId &&
+        (latestInProject === null || thread.updatedAt > latestInProject.updatedAt)
+      ) {
+        latestInProject = thread;
+      }
+    }
+    return latestInProject?.modelSelection ?? latestAnywhere?.modelSelection ?? null;
+  }, [newTaskProject, threads]);
+
+  const openBacklogDialog = useCallback(() => setBacklogDialogOpen(true), []);
+
+  const createBacklogTask = useCallback(
+    (title: string) => {
+      if (!newTaskProject || !newTaskModelSelection) return;
+      void createThread({
+        environmentId: newTaskProject.environmentId,
+        input: {
+          threadId: newThreadId(),
+          projectId: newTaskProject.id,
+          title,
+          modelSelection: newTaskModelSelection,
+          runtimeMode: "auto",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        },
+      });
+    },
+    [createThread, newTaskProject, newTaskModelSelection],
+  );
 
   if (!bootstrapped && threads.length === 0) {
     return (
@@ -492,37 +551,51 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveDrag(null)}
     >
-      {/* Columns scroll horizontally in their own container; the host never does. */}
-      <div
-        className={
-          compact
-            ? "flex h-full min-h-0 gap-2 overflow-x-auto p-2 pb-2.5"
-            : "flex h-full min-h-0 gap-3 overflow-x-auto p-4"
-        }
-      >
-        {columns.map((column) => (
-          <BoardColumnSection
-            key={column.definition.key}
-            column={column}
-            dragFrom={activeDrag?.column ?? null}
-            dragReturn={
-              activeDrag?.column === "done" ? resolveDoneReturnColumn(activeDrag.thread) : null
-            }
-            projectTitles={projectTitles}
-            onOpen={openThread}
-            onSettle={settle}
-            onUnsettle={unsettle}
-            onArchive={archive}
-            onDelete={deleteWithConfirm}
-            onSnooze={snooze}
-            onUnsnooze={unsnooze}
-            onContextMenu={showCardContextMenu}
-            onNewThread={column.definition.key === "backlog" ? newThreadInScope : null}
-            onArchiveAll={column.definition.key === "done" ? archiveAll : null}
-            now={nowTick}
-          />
-        ))}
+      <div className="relative h-full min-h-0">
+        {/* Columns scroll horizontally in their own container; the host never does. */}
+        <div
+          className={
+            compact
+              ? "flex h-full min-h-0 gap-2 overflow-x-auto p-2 pb-2.5"
+              : "flex h-full min-h-0 gap-3 overflow-x-auto p-4"
+          }
+        >
+          {columns.map((column) => (
+            <BoardColumnSection
+              key={column.definition.key}
+              column={column}
+              dragFrom={activeDrag?.column ?? null}
+              dragReturn={
+                activeDrag?.column === "done" ? resolveDoneReturnColumn(activeDrag.thread) : null
+              }
+              projectTitles={projectTitles}
+              onOpen={openThread}
+              onSettle={settle}
+              onUnsettle={unsettle}
+              onArchive={archive}
+              onDelete={deleteWithConfirm}
+              onSnooze={snooze}
+              onUnsnooze={unsnooze}
+              onContextMenu={showCardContextMenu}
+              onNewThread={column.definition.key === "backlog" ? openBacklogDialog : null}
+              onArchiveAll={column.definition.key === "done" ? archiveAll : null}
+              now={nowTick}
+            />
+          ))}
+        </div>
+        {/* The drawer host has no header, so the prompts editor rides the
+            board itself. */}
+        {compact ? (
+          <BoardPromptsEditor className="absolute right-2 bottom-2 z-10 rounded-md border border-border bg-card/90 shadow-sm" />
+        ) : null}
       </div>
+      <BoardBacklogDialog
+        open={backlogDialogOpen}
+        onOpenChange={setBacklogDialogOpen}
+        projectTitle={newTaskProject?.title ?? null}
+        modelAvailable={newTaskProject !== null && newTaskModelSelection !== null}
+        onCreate={createBacklogTask}
+      />
       {/* dropAnimation off: the source card never moved (the overlay is the
           dragged visual), so the default snap-back reads as a glitch. */}
       <DragOverlay dropAnimation={null}>
