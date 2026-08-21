@@ -193,11 +193,15 @@ function BoardCardImpl({
       className={cn(
         CARD_FRAME_CLASS,
         "group/board-card relative transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-        // The sidebar marks its active row with a translucent wash, but that
-        // token vanishes on an opaque elevated card, so the open thread's
-        // card carries a primary border and ring instead; everything else
-        // lights on hover only.
-        selected ? "border-primary/50 ring-1 ring-primary/25" : "hover:bg-accent/60",
+        // The open thread's card wears the sidebar's selected wash. The token
+        // is translucent, so it is layered over the card surface via
+        // background-image - a flat bg- swap would replace bg-card with a
+        // near-identical shade. The quiet ring-color border keeps selection
+        // legible in themes whose wash matches the card (default light
+        // theme: both white). Everything else lights on hover only.
+        selected
+          ? "border-ring/40 [background-image:linear-gradient(var(--sidebar-row-selected),var(--sidebar-row-selected))]"
+          : "hover:bg-accent/60",
         // Offscreen cards skip style, layout and paint; a tall column costs
         // what the viewport shows. The intrinsic size keeps scrolling honest.
         "[contain-intrinsic-block-size:72px] [content-visibility:auto]",
