@@ -1,5 +1,5 @@
 import { useDraggable } from "@dnd-kit/core";
-import { ArchiveIcon, CheckIcon, ClockIcon, Undo2Icon } from "lucide-react";
+import { AlarmClockOffIcon, ArchiveIcon, CheckIcon, ClockIcon, Undo2Icon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { useClientSettings } from "~/hooks/useSettings";
@@ -8,9 +8,9 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import type { SidebarThreadSummary } from "~/types";
 
 import { firstValidTimestamp, resolveThreadStatusPill } from "../Sidebar.logic";
-import { resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
+import { resolveSnoozePresets, snoozeWakeDescription, type SnoozePreset } from "../Sidebar.snooze";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import type { BoardColumnKey } from "./boardColumns.logic";
+import { type BoardColumnKey, isThreadSnoozed } from "./boardColumns.logic";
 
 export interface BoardCardDragData {
   readonly threadId: SidebarThreadSummary["id"];
@@ -26,9 +26,12 @@ const ACTION_BUTTON_CLASS =
 function BoardCardBody({
   thread,
   projectTitle,
+  snoozedWakeLabel = null,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string;
+  /** When set, the card is snoozed: the status pill yields to a wake label. */
+  snoozedWakeLabel?: string | null;
 }) {
   const pill = resolveThreadStatusPill({ thread });
   const activityAt = firstValidTimestamp(
@@ -48,7 +51,12 @@ function BoardCardBody({
           <span className="ml-auto shrink-0">{formatRelativeTimeLabel(activityAt)}</span>
         ) : null}
       </span>
-      {pill ? (
+      {snoozedWakeLabel !== null ? (
+        <span className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <ClockIcon className="size-3" />
+          {`Snoozed until ${snoozedWakeLabel}`}
+        </span>
+      ) : pill ? (
         <span className={cn("mt-1.5 flex items-center gap-1.5 text-xs", pill.colorClass)}>
           <span
             className={cn(
@@ -84,25 +92,34 @@ function BoardCardImpl({
   thread,
   projectTitle,
   column,
+  now,
   onOpen,
   onSettle,
   onUnsettle,
   onArchive,
   onSnooze,
+  onUnsnooze,
   onContextMenu,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string;
   column: BoardColumnKey;
+  now: number;
   onOpen: (thread: SidebarThreadSummary) => void;
   onSettle: (thread: SidebarThreadSummary) => void;
   onUnsettle: (thread: SidebarThreadSummary) => void;
   onArchive: (thread: SidebarThreadSummary) => void;
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
+  onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const snoozed = isThreadSnoozed(thread, now);
+  const snoozedWakeLabel =
+    snoozed && thread.snoozedUntil != null
+      ? snoozeWakeDescription(thread.snoozedUntil, new Date(now), timestampFormat)
+      : null;
   // Presets resolve at open time so "In 1 hour" is relative to the click.
   const snoozePresets = useMemo(
     () => (snoozeOpen ? resolveSnoozePresets(new Date(), timestampFormat) : []),
@@ -144,10 +161,17 @@ function BoardCardImpl({
         // Offscreen cards skip style, layout and paint; a tall column costs
         // what the viewport shows. The intrinsic size keeps scrolling honest.
         "[contain-intrinsic-block-size:72px] [content-visibility:auto]",
+        // Snoozed cards recede like disabled controls but stay interactive;
+        // hover restores enough contrast to read and act on them.
+        snoozed && "opacity-50 hover:opacity-90",
         isDragging && "opacity-40",
       )}
     >
-      <BoardCardBody thread={thread} projectTitle={projectTitle} />
+      <BoardCardBody
+        thread={thread}
+        projectTitle={projectTitle}
+        snoozedWakeLabel={snoozedWakeLabel}
+      />
       <span
         className={cn(
           "absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-card/90 opacity-0 transition-opacity",
@@ -180,6 +204,33 @@ function BoardCardImpl({
               className={ACTION_BUTTON_CLASS}
             >
               <ArchiveIcon className="size-3.5" />
+            </button>
+          </>
+        ) : snoozed ? (
+          <>
+            <button
+              type="button"
+              aria-label="Unsnooze thread"
+              title="Unsnooze"
+              onClick={(event) => {
+                event.stopPropagation();
+                onUnsnooze(thread);
+              }}
+              className={ACTION_BUTTON_CLASS}
+            >
+              <AlarmClockOffIcon className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Settle thread"
+              title="Settle"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSettle(thread);
+              }}
+              className={ACTION_BUTTON_CLASS}
+            >
+              <CheckIcon className="size-3.5" />
             </button>
           </>
         ) : (

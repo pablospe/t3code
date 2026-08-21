@@ -50,6 +50,8 @@ const PLAN_KICKOFF_MESSAGE =
 const EXECUTE_PLAN_MESSAGE = "Proceed: implement the proposed plan.";
 const REPLAN_MESSAGE =
   "Re-plan: review this thread's work and outcome so far and propose a revised plan addressing the problems or feedback. Do not implement anything yet.";
+const RESUME_MESSAGE =
+  "Resume: continue the implementation, completing anything unfinished and addressing any feedback raised in this thread.";
 
 function BoardColumnSection({
   column,
@@ -61,9 +63,11 @@ function BoardColumnSection({
   onUnsettle,
   onArchive,
   onSnooze,
+  onUnsnooze,
   onContextMenu,
   onNewThread,
   onArchiveAll,
+  now,
 }: {
   column: BoardColumn<SidebarThreadSummary>;
   dragFrom: BoardColumnKey | null;
@@ -75,9 +79,11 @@ function BoardColumnSection({
   onUnsettle: (thread: SidebarThreadSummary) => void;
   onArchive: (thread: SidebarThreadSummary) => void;
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
+  onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
   onNewThread: (() => void) | null;
   onArchiveAll: ((threads: ReadonlyArray<SidebarThreadSummary>) => void) | null;
+  now: number;
 }) {
   const validTarget =
     dragFrom !== null &&
@@ -144,7 +150,9 @@ function BoardColumnSection({
             onUnsettle={onUnsettle}
             onArchive={onArchive}
             onSnooze={onSnooze}
+            onUnsnooze={onUnsnooze}
             onContextMenu={onContextMenu}
+            now={now}
           />
         ))}
         {column.threads.length === 0 ? (
@@ -168,7 +176,8 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   const navigate = useNavigate();
   const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
   const { handleNewThread, defaultProjectRef } = useHandleNewThread();
-  const { settleThread, unsettleThread, snoozeThread, archiveThread } = useThreadActions();
+  const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, archiveThread } =
+    useThreadActions();
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const [activeDrag, setActiveDrag] = useState<{
     thread: SidebarThreadSummary;
@@ -185,6 +194,13 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   // The 6px activation distance keeps plain clicks working even though the
   // drag listeners sit on the whole card.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // Minute tick so snoozed cards wake (un-dim, float back up) when their
+  // snoozedUntil passes - a timer, not an animation.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const filteredThreads = useMemo(
     () =>
@@ -232,11 +248,15 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
 
   const columns = useMemo(() => {
     const now = Date.now();
-    return groupThreadsIntoBoardColumns(filteredThreads, (thread) => {
-      const pin = columnPins.get(boardKey(thread.environmentId, thread.id));
-      return pin && pin.expiresAt > now ? pin.column : null;
-    });
-  }, [filteredThreads, columnPins]);
+    return groupThreadsIntoBoardColumns(
+      filteredThreads,
+      (thread) => {
+        const pin = columnPins.get(boardKey(thread.environmentId, thread.id));
+        return pin && pin.expiresAt > now ? pin.column : null;
+      },
+      nowTick,
+    );
+  }, [filteredThreads, columnPins, nowTick]);
 
   const openThread = useCallback(
     (thread: SidebarThreadSummary) => {
@@ -333,6 +353,12 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
     },
     [snoozeThread],
   );
+  const unsnooze = useCallback(
+    (thread: SidebarThreadSummary) => {
+      void unsnoozeThread(scopeThreadRef(thread.environmentId, thread.id));
+    },
+    [unsnoozeThread],
+  );
 
   const startThreadTurn = useCallback(
     (thread: SidebarThreadSummary, text: string, interactionMode: "default" | "plan") => {
@@ -407,6 +433,11 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
         pinColumn(thread, "planning");
         return;
       }
+      if (from === "review" && target === "running") {
+        startThreadTurn(thread, RESUME_MESSAGE, "default");
+        pinColumn(thread, "running");
+        return;
+      }
       if (from === "planning" && target === "running") {
         startThreadTurn(thread, EXECUTE_PLAN_MESSAGE, "default");
         pinColumn(thread, "running");
@@ -474,9 +505,11 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
             onUnsettle={unsettle}
             onArchive={archive}
             onSnooze={snooze}
+            onUnsnooze={unsnooze}
             onContextMenu={showCardContextMenu}
             onNewThread={column.definition.key === "backlog" ? newThreadInScope : null}
             onArchiveAll={column.definition.key === "done" ? archiveAll : null}
+            now={nowTick}
           />
         ))}
       </div>

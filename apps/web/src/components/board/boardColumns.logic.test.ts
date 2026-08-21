@@ -6,6 +6,7 @@ import {
   BOARD_COLUMNS,
   groupThreadsIntoBoardColumns,
   isBoardTransitionAllowed,
+  isThreadSnoozed,
   resolveBoardColumn,
   resolveDoneReturnColumn,
 } from "./boardColumns.logic";
@@ -140,7 +141,8 @@ describe("isBoardTransitionAllowed", () => {
     expect(isBoardTransitionAllowed("running", "review")).toBe(false);
     expect(isBoardTransitionAllowed("review", "done")).toBe(true);
     expect(isBoardTransitionAllowed("review", "planning")).toBe(true);
-    expect(isBoardTransitionAllowed("review", "running")).toBe(false);
+    expect(isBoardTransitionAllowed("review", "running")).toBe(true);
+    expect(isBoardTransitionAllowed("review", "backlog")).toBe(false);
   });
 
   it("routes done drags only to the true unsettle destination", () => {
@@ -178,6 +180,35 @@ describe("groupThreadsIntoBoardColumns", () => {
     const columns = groupThreadsIntoBoardColumns([older, newer]);
     const backlog = columns.find((column) => column.definition.key === "backlog");
     expect(backlog?.threads.map((thread) => thread.id)).toEqual(["thread-new", "thread-old"]);
+  });
+
+  it("sinks snoozed threads to the column tail ordered by wake time", () => {
+    const NOW = Date.parse("2026-08-21T12:00:00.000Z");
+    const awake = makeThread({
+      id: "thread-awake" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-19T10:00:00.000Z",
+    });
+    const wakesLater = makeThread({
+      id: "thread-later" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-21T11:00:00.000Z",
+      snoozedUntil: "2026-08-22T09:00:00.000Z",
+    });
+    const wakesSoon = makeThread({
+      id: "thread-soon" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-21T11:30:00.000Z",
+      snoozedUntil: "2026-08-21T15:00:00.000Z",
+    });
+    const columns = groupThreadsIntoBoardColumns([wakesLater, awake, wakesSoon], undefined, NOW);
+    const backlog = columns.find((column) => column.definition.key === "backlog");
+    expect(backlog?.threads.map((thread) => thread.id)).toEqual([
+      "thread-awake",
+      "thread-soon",
+      "thread-later",
+    ]);
+    // A passed wake time stops classifying as snoozed - the thread floats back.
+    expect(isThreadSnoozed(wakesSoon, Date.parse("2026-08-21T16:00:00.000Z"))).toBe(false);
+    expect(isThreadSnoozed(wakesSoon, NOW)).toBe(true);
+    expect(isThreadSnoozed(awake, NOW)).toBe(false);
   });
 
   it("splits threads into their derived columns", () => {

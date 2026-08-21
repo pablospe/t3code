@@ -32,7 +32,19 @@ export type BoardThreadInput = Pick<
   | "latestTurn"
   | "session"
   | "backgroundLiveness"
+  | "snoozedUntil"
 >;
+
+/** Snooze is an overlay, not a phase: a snoozed thread keeps its column but
+    recedes (sunk to the column's tail, rendered dimmed) until it wakes. */
+export function isThreadSnoozed(
+  thread: Pick<SidebarThreadSummary, "snoozedUntil">,
+  now: number,
+): boolean {
+  if (thread.snoozedUntil == null) return false;
+  const wake = Date.parse(thread.snoozedUntil);
+  return !Number.isNaN(wake) && wake > now;
+}
 
 // The board stores nothing: every column is derived from the shell projection
 // the sidebar already renders, so all clients agree without new state.
@@ -85,7 +97,8 @@ const BOARD_TRANSITIONS: Record<BoardColumnKey, ReadonlyArray<BoardColumnKey>> =
   backlog: ["planning", "done"],
   planning: ["running", "done"],
   running: ["done"],
-  review: ["planning", "done"],
+  // Review loops back like agtx: -> Planning re-plans, -> Running resumes.
+  review: ["planning", "running", "done"],
   // Done is dynamic: its only legal target is the column the thread truly
   // returns to when unsettled - see resolveDoneReturnColumn.
   done: [],
@@ -113,11 +126,13 @@ type SortableBoardThread = BoardThreadInput &
 
 // Columns order by most recent activity so the top of each lane is the thread
 // you touched last; id breaks ties to keep the order stable across renders.
-// resolveOverride lets the caller pin a thread to a column optimistically
-// while a lifecycle command round-trips.
+// Snoozed threads sink to the column's tail as a wake-up queue, soonest wake
+// first. resolveOverride lets the caller pin a thread to a column
+// optimistically while a lifecycle command round-trips.
 export function groupThreadsIntoBoardColumns<T extends SortableBoardThread>(
   threads: ReadonlyArray<T>,
   resolveOverride?: (thread: T) => BoardColumnKey | null,
+  now: number = Number.NEGATIVE_INFINITY,
 ): ReadonlyArray<BoardColumn<T>> {
   const byColumn: Record<BoardColumnKey, T[]> = {
     backlog: [],
@@ -131,10 +146,17 @@ export function groupThreadsIntoBoardColumns<T extends SortableBoardThread>(
   }
   const activityMs = (thread: T) =>
     firstValidTimestampMs(thread.latestUserMessageAt, thread.updatedAt, thread.createdAt);
+  const wakeMs = (thread: T) => firstValidTimestampMs(thread.snoozedUntil);
   return BOARD_COLUMNS.map((definition) => ({
     definition,
-    threads: byColumn[definition.key].toSorted(
-      (left, right) => activityMs(right) - activityMs(left) || left.id.localeCompare(right.id),
-    ),
+    threads: byColumn[definition.key].toSorted((left, right) => {
+      const leftSnoozed = isThreadSnoozed(left, now);
+      const rightSnoozed = isThreadSnoozed(right, now);
+      if (leftSnoozed !== rightSnoozed) return leftSnoozed ? 1 : -1;
+      if (leftSnoozed && rightSnoozed) {
+        return wakeMs(left) - wakeMs(right) || left.id.localeCompare(right.id);
+      }
+      return activityMs(right) - activityMs(left) || left.id.localeCompare(right.id);
+    }),
   }));
 }
