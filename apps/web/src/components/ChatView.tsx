@@ -6271,6 +6271,7 @@ function ChatViewContent(props: ChatViewProps) {
             setThreadErrorBannerDismissTick((tick) => tick + 1);
           }}
         />
+        <BoardDrawer />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}
@@ -6623,7 +6624,6 @@ function ChatViewContent(props: ChatViewProps) {
             onAddTerminalContext={addTerminalContextToDraft}
           />
         ))}
-        <BoardDrawer />
       </div>
 
       {!shouldUseRightPanelSheet && rightPanelOpen && activeThreadRef ? (

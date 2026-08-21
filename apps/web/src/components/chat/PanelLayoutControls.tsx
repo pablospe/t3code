@@ -1,9 +1,9 @@
 import {
-  KanbanIcon,
   Maximize2Icon,
   Minimize2Icon,
   PanelBottomIcon,
   PanelRightIcon,
+  PanelTopIcon,
 } from "lucide-react";
 import { memo } from "react";
 
@@ -58,7 +58,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
                 variant="ghost"
                 size="sm"
               >
-                <KanbanIcon className="size-4" />
+                <PanelTopIcon className="size-4" />
               </Toggle>
             }
           />

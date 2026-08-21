@@ -315,7 +315,9 @@ export const ChatHeader = memo(function ChatHeader({
         data-chat-header-actions
         className={cn(
           "flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3",
-          rightPanelOpen ? "pr-0" : "pr-16",
+          // Reserves room for the three-toggle panel-layout cluster overlaying
+          // the titlebar's right edge (board, terminal, right panel).
+          rightPanelOpen ? "pr-0" : "pr-24",
         )}
       >
         {activeProjectScripts && (
