@@ -18,7 +18,9 @@ export const BOARD_COLUMNS: ReadonlyArray<BoardColumnDefinition> = [
   { key: "planning", title: "Planning", emptyHint: "Plans awaiting your approval land here" },
   { key: "running", title: "Running", emptyHint: "Threads with agents working land here" },
   { key: "review", title: "Review", emptyHint: "Finished or blocked work that needs you" },
-  { key: "done", title: "Done", emptyHint: "Archived and settled threads land here" },
+  // Archived threads never reach clients (the shell stream excludes them), so
+  // in practice this column holds settled threads; archiving removes the card.
+  { key: "done", title: "Done", emptyHint: "Settled threads land here" },
 ];
 
 export type BoardThreadInput = Pick<
