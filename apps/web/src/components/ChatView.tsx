@@ -4736,6 +4736,13 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      if (command === "board.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleBoardDrawer();
+        return;
+      }
+
       if (command === "rightPanel.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -4847,6 +4854,7 @@ function ChatViewContent(props: ChatViewProps) {
     toggleRightPanel,
     toggleRightPanelMaximized,
     toggleTerminalVisibility,
+    toggleBoardDrawer,
     composerRef,
   ]);
 
@@ -6053,6 +6061,7 @@ function ChatViewContent(props: ChatViewProps) {
   const panelToggleControls = (
     <PanelLayoutControls
       boardDrawerOpen={boardDrawerOpen}
+      boardShortcutLabel={shortcutLabelForCommand(keybindings, "board.toggle")}
       onToggleBoardDrawer={toggleBoardDrawer}
       terminalAvailable={activeProject !== null}
       terminalOpen={terminalUiState.terminalOpen}

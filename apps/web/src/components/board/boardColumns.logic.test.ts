@@ -91,6 +91,20 @@ describe("resolveBoardColumn", () => {
     expect(resolveBoardColumn(thread)).toBe("planning");
   });
 
+  it("keeps any quiet plan-mode thread that has run in planning", () => {
+    const thread = makeThread({ interactionMode: "plan", latestTurn: completedTurn });
+    expect(resolveBoardColumn(thread)).toBe("planning");
+  });
+
+  it("plan-mode threads still follow running and backlog rules", () => {
+    expect(
+      resolveBoardColumn(
+        makeThread({ interactionMode: "plan", session: makeSession("running", "turn-1") }),
+      ),
+    ).toBe("running");
+    expect(resolveBoardColumn(makeThread({ interactionMode: "plan" }))).toBe("backlog");
+  });
+
   it("puts threads that never ran a turn in backlog", () => {
     expect(resolveBoardColumn(makeThread())).toBe("backlog");
   });

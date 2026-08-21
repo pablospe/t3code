@@ -22,6 +22,7 @@ interface PanelLayoutControlsProps {
   liveAgentCount: number;
   /** The board drawer toggle renders only where a handler is provided. */
   boardDrawerOpen?: boolean;
+  boardShortcutLabel?: string | null;
   onToggleBoardDrawer?: () => void;
   onToggleTerminal: () => void;
   onToggleRightPanel: () => void;
@@ -37,6 +38,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelShortcutLabel,
   liveAgentCount,
   boardDrawerOpen = false,
+  boardShortcutLabel = null,
   onToggleBoardDrawer,
   onToggleTerminal,
   onToggleRightPanel,
@@ -62,7 +64,9 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               </Toggle>
             }
           />
-          <TooltipPopup side="bottom">Toggle board drawer</TooltipPopup>
+          <TooltipPopup side="bottom">
+            {`Toggle board drawer${boardShortcutLabel ? ` (${boardShortcutLabel})` : ""}`}
+          </TooltipPopup>
         </Tooltip>
       ) : null}
       {showTerminalControl ? (

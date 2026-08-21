@@ -3,6 +3,7 @@ import { useCallback, useRef } from "react";
 import { clampBoardDrawerHeight, useBoardDrawerStore } from "~/boardDrawerStore";
 
 import { BoardContent } from "./BoardContent";
+import { BoardProjectFilter } from "./BoardProjectFilter";
 
 /** Global top drawer hosting the board, docked between the chat header and
     the conversation. Open state and height live in a global store, so the
@@ -12,6 +13,8 @@ export function BoardDrawer() {
   const open = useBoardDrawerStore((state) => state.open);
   const height = useBoardDrawerStore((state) => state.height);
   const setHeight = useBoardDrawerStore((state) => state.setHeight);
+  const projectFilter = useBoardDrawerStore((state) => state.projectFilter);
+  const setProjectFilter = useBoardDrawerStore((state) => state.setProjectFilter);
   const dragStateRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(
     null,
   );
@@ -62,8 +65,23 @@ export function BoardDrawer() {
         onPointerCancel={handleResizePointerUp}
         className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-row-resize"
       />
-      <div className="h-full min-h-0">
-        <BoardContent />
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center gap-2 px-4 pt-2">
+          <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            Board
+          </span>
+          <BoardProjectFilter
+            environment={projectFilter?.environmentId}
+            project={projectFilter?.projectId}
+            onChange={setProjectFilter}
+          />
+        </div>
+        <div className="min-h-0 flex-1">
+          <BoardContent
+            project={projectFilter?.projectId}
+            environment={projectFilter?.environmentId}
+          />
+        </div>
       </div>
     </aside>
   );

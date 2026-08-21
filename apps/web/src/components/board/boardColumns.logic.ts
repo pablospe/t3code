@@ -1,7 +1,5 @@
 import type { SidebarThreadSummary } from "~/types";
 
-import { isLatestTurnSettled } from "~/session-logic";
-
 import { firstValidTimestampMs, resolveSidebarThreadStatus } from "../Sidebar.logic";
 
 export type BoardColumnKey = "backlog" | "planning" | "running" | "review" | "done";
@@ -58,13 +56,10 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
     return "done";
   }
 
-  // Same gate as the sidebar's "Plan Ready" pill: a settled plan-mode turn
-  // holding an actionable proposed plan is waiting on a decision, not review.
-  if (
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan
-  ) {
+  // Any plan-mode thread that has run and is quiet is in its planning phase:
+  // drafting, proposing, or awaiting a plan decision. Attention states
+  // (approval/input) still route to review above - those need the user NOW.
+  if (thread.interactionMode === "plan" && thread.latestTurn !== null) {
     return "planning";
   }
 
