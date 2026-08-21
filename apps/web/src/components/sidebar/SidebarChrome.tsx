@@ -2,6 +2,7 @@ import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
   GitPullRequestIcon,
+  KanbanIcon,
   SettingsIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
@@ -126,7 +127,9 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
         ? "usage"
         : location.pathname === "/pull-requests"
           ? "pull-requests"
-          : null,
+          : location.pathname === "/board"
+            ? "board"
+            : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -146,6 +149,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleBoardClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/board" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -208,6 +216,18 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 </Tooltip>
               </SidebarMenuItem>
             ) : null}
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton aria-label="Board" onClick={handleBoardClick} size="icon">
+                      <KanbanIcon />
+                    </SidebarMenuButton>
+                  }
+                />
+                <TooltipPopup side="top">Board</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
             <SidebarMenuItem className="shrink-0">
               <Tooltip>
                 <TooltipTrigger
