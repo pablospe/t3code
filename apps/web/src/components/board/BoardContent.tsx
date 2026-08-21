@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 
+import { useBoardPromptsStore } from "~/boardPromptsStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { useThreadActions } from "~/hooks/useThreadActions";
@@ -45,14 +46,6 @@ import { BoardCard, type BoardCardDragData, BoardCardPreview } from "./BoardCard
 
 const boardKey = (environmentId: string, id: string) => `${environmentId}:${id}`;
 
-const PLAN_KICKOFF_MESSAGE =
-  "Plan the task described by this thread's title. Propose a concrete plan; do not implement anything yet.";
-const EXECUTE_PLAN_MESSAGE = "Proceed: implement the proposed plan.";
-const REPLAN_MESSAGE =
-  "Re-plan: review this thread's work and outcome so far and propose a revised plan addressing the problems or feedback. Do not implement anything yet.";
-const RESUME_MESSAGE =
-  "Resume: continue the implementation, completing anything unfinished and addressing any feedback raised in this thread.";
-
 function BoardColumnSection({
   column,
   dragFrom,
@@ -62,6 +55,7 @@ function BoardColumnSection({
   onSettle,
   onUnsettle,
   onArchive,
+  onDelete,
   onSnooze,
   onUnsnooze,
   onContextMenu,
@@ -78,6 +72,7 @@ function BoardColumnSection({
   onSettle: (thread: SidebarThreadSummary) => void;
   onUnsettle: (thread: SidebarThreadSummary) => void;
   onArchive: (thread: SidebarThreadSummary) => void;
+  onDelete: (thread: SidebarThreadSummary) => void;
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
   onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
@@ -149,6 +144,7 @@ function BoardColumnSection({
             onSettle={onSettle}
             onUnsettle={onUnsettle}
             onArchive={onArchive}
+            onDelete={onDelete}
             onSnooze={onSnooze}
             onUnsnooze={onUnsnooze}
             onContextMenu={onContextMenu}
@@ -176,8 +172,15 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   const navigate = useNavigate();
   const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
   const { handleNewThread, defaultProjectRef } = useHandleNewThread();
-  const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, archiveThread } =
-    useThreadActions();
+  const {
+    settleThread,
+    unsettleThread,
+    snoozeThread,
+    unsnoozeThread,
+    archiveThread,
+    confirmAndDeleteThread,
+  } = useThreadActions();
+  const boardPrompts = useBoardPromptsStore((state) => state.prompts);
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const [activeDrag, setActiveDrag] = useState<{
     thread: SidebarThreadSummary;
@@ -359,6 +362,12 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
     },
     [unsnoozeThread],
   );
+  const deleteWithConfirm = useCallback(
+    (thread: SidebarThreadSummary) => {
+      void confirmAndDeleteThread(scopeThreadRef(thread.environmentId, thread.id));
+    },
+    [confirmAndDeleteThread],
+  );
 
   const startThreadTurn = useCallback(
     (thread: SidebarThreadSummary, text: string, interactionMode: "default" | "plan") => {
@@ -424,26 +433,26 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
       const busy = thread.session?.status === "running" || thread.session?.status === "starting";
       if (busy) return;
       if (from === "backlog" && target === "planning") {
-        startThreadTurn(thread, PLAN_KICKOFF_MESSAGE, "plan");
+        startThreadTurn(thread, boardPrompts.backlogToPlanning, "plan");
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "planning") {
-        startThreadTurn(thread, REPLAN_MESSAGE, "plan");
+        startThreadTurn(thread, boardPrompts.reviewToPlanning, "plan");
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "running") {
-        startThreadTurn(thread, RESUME_MESSAGE, "default");
+        startThreadTurn(thread, boardPrompts.reviewToRunning, "default");
         pinColumn(thread, "running");
         return;
       }
       if (from === "planning" && target === "running") {
-        startThreadTurn(thread, EXECUTE_PLAN_MESSAGE, "default");
+        startThreadTurn(thread, boardPrompts.planningToRunning, "default");
         pinColumn(thread, "running");
       }
     },
-    [activeDrag, settle, unsettle, startThreadTurn, pinColumn],
+    [activeDrag, settle, unsettle, startThreadTurn, pinColumn, boardPrompts],
   );
 
   const newThreadInScope = useCallback(() => {
@@ -504,6 +513,7 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
             onSettle={settle}
             onUnsettle={unsettle}
             onArchive={archive}
+            onDelete={deleteWithConfirm}
             onSnooze={snooze}
             onUnsnooze={unsnooze}
             onContextMenu={showCardContextMenu}

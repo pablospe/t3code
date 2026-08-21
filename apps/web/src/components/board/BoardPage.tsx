@@ -1,5 +1,6 @@
 import { SidebarInset } from "../ui/sidebar";
 import { BoardContent } from "./BoardContent";
+import { BoardPromptsEditor } from "./BoardPromptsEditor";
 
 /** Full-page board. Project scope follows the sidebar's selector, so this
     page is just a chrome-less host for the shared board content. */
@@ -9,6 +10,7 @@ export function BoardPage() {
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
           <h1 className="text-sm font-semibold">Board</h1>
+          <BoardPromptsEditor />
         </header>
         <div className="min-h-0 flex-1">
           <BoardContent />

@@ -1,5 +1,12 @@
 import { useDraggable } from "@dnd-kit/core";
-import { AlarmClockOffIcon, ArchiveIcon, CheckIcon, ClockIcon, Undo2Icon } from "lucide-react";
+import {
+  AlarmClockOffIcon,
+  ArchiveIcon,
+  CheckIcon,
+  ClockIcon,
+  Trash2Icon,
+  Undo2Icon,
+} from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { useClientSettings } from "~/hooks/useSettings";
@@ -97,6 +104,7 @@ function BoardCardImpl({
   onSettle,
   onUnsettle,
   onArchive,
+  onDelete,
   onSnooze,
   onUnsnooze,
   onContextMenu,
@@ -109,6 +117,7 @@ function BoardCardImpl({
   onSettle: (thread: SidebarThreadSummary) => void;
   onUnsettle: (thread: SidebarThreadSummary) => void;
   onArchive: (thread: SidebarThreadSummary) => void;
+  onDelete: (thread: SidebarThreadSummary) => void;
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
   onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
@@ -204,6 +213,18 @@ function BoardCardImpl({
               className={ACTION_BUTTON_CLASS}
             >
               <ArchiveIcon className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Delete thread"
+              title="Delete"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete(thread);
+              }}
+              className={cn(ACTION_BUTTON_CLASS, "hover:text-error")}
+            >
+              <Trash2Icon className="size-3.5" />
             </button>
           </>
         ) : snoozed ? (
