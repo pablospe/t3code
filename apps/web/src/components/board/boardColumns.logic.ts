@@ -56,10 +56,15 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
     return "done";
   }
 
-  // Any plan-mode thread that has run and is quiet is in its planning phase:
-  // drafting, proposing, or awaiting a plan decision. Attention states
-  // (approval/input) still route to review above - those need the user NOW.
-  if (thread.interactionMode === "plan" && thread.latestTurn !== null) {
+  // Planning keys on the NATIVE signal first: an actionable proposed plan is
+  // captured from the provider's own plan flow (Claude's ExitPlanMode)
+  // regardless of T3's legacy thread mode. The interaction-mode check keeps
+  // legacy plan-mode threads here too for users with the beta flag on.
+  // Attention states (approval/input) still route to review above.
+  if (
+    thread.hasActionableProposedPlan ||
+    (thread.interactionMode === "plan" && thread.latestTurn !== null)
+  ) {
     return "planning";
   }
 

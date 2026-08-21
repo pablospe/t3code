@@ -96,6 +96,11 @@ describe("resolveBoardColumn", () => {
     expect(resolveBoardColumn(thread)).toBe("planning");
   });
 
+  it("puts a natively captured proposed plan in planning even in default mode", () => {
+    const thread = makeThread({ latestTurn: completedTurn, hasActionableProposedPlan: true });
+    expect(resolveBoardColumn(thread)).toBe("planning");
+  });
+
   it("plan-mode threads still follow running and backlog rules", () => {
     expect(
       resolveBoardColumn(
