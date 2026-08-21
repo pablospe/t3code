@@ -4,11 +4,14 @@ import {
   ArchiveIcon,
   CheckIcon,
   ClockIcon,
+  FileTextIcon,
   Trash2Icon,
   Undo2Icon,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
+import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
+import { boardTaskMetaKey, useBoardTaskMetaStore } from "~/boardTaskMetaStore";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -30,6 +33,14 @@ const CARD_FRAME_CLASS = "w-full rounded-lg border border-border bg-card px-3 py
 const ACTION_BUTTON_CLASS =
   "flex size-6 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground";
 
+/** A per-task workflow is worth naming in the tooltip: it changes what every
+    drop on this card sends. */
+function presetLabelPrefix(presetId: string | undefined): string {
+  if (!presetId) return "";
+  const preset = BOARD_PROMPT_PRESETS.find((candidate) => candidate.id === presetId);
+  return preset ? `[${preset.label}] ` : "";
+}
+
 function BoardCardBody({
   thread,
   projectTitle,
@@ -46,6 +57,14 @@ function BoardCardBody({
     thread.updatedAt,
     thread.createdAt,
   );
+  // Task details are client-local, so the card reveals them on hover rather
+  // than spending card height on text only this device has.
+  const meta = useBoardTaskMetaStore(
+    (state) => state.metaByThreadKey[boardTaskMetaKey(thread.environmentId, thread.id)],
+  );
+  const detailsTooltip = meta?.details
+    ? `${presetLabelPrefix(meta.presetId)}${meta.details}`
+    : null;
   return (
     <>
       <span className="block truncate pr-12 text-sm font-medium text-foreground">
@@ -54,6 +73,13 @@ function BoardCardBody({
       <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground/70">
         <span className="truncate">{projectTitle}</span>
         {thread.branch ? <span className="truncate">{thread.branch}</span> : null}
+        {detailsTooltip !== null ? (
+          // The tooltip rides a span: a title attribute on an svg does not
+          // surface natively.
+          <span className="flex shrink-0 items-center" title={detailsTooltip}>
+            <FileTextIcon className="size-3" aria-label="Has task details" />
+          </span>
+        ) : null}
         {activityAt ? (
           <span className="ml-auto shrink-0">{formatRelativeTimeLabel(activityAt)}</span>
         ) : null}

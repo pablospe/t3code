@@ -50,7 +50,9 @@ export function BoardPromptsEditor({ className }: { className?: string } = {}) {
           <DialogDescription>
             Sent verbatim as the turn's message when a card is dropped - slash commands and skills
             work (e.g. <span className="font-mono">/openspec:plan</span>).{" "}
-            <span className="font-mono">{"{title}"}</span> is replaced with the thread's title.
+            <span className="font-mono">{"{title}"}</span> is replaced with the thread's title, and{" "}
+            <span className="font-mono">{"{task}"}</span> with the card's task details (its title
+            when it has none).
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-3">

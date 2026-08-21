@@ -9,6 +9,7 @@ import {
   isThreadSnoozed,
   resolveBoardColumn,
   resolveDoneReturnColumn,
+  substituteBoardPromptPlaceholders,
 } from "./boardColumns.logic";
 
 type TestThread = Parameters<typeof resolveBoardColumn>[0] &
@@ -125,6 +126,46 @@ describe("resolveBoardColumn", () => {
 
   it("puts quiet threads with a finished turn in review", () => {
     expect(resolveBoardColumn(makeThread({ latestTurn: completedTurn }))).toBe("review");
+  });
+});
+
+describe("substituteBoardPromptPlaceholders", () => {
+  it("replaces every {title} with the card's title", () => {
+    expect(
+      substituteBoardPromptPlaceholders("/opsx:propose {title} - {title}", {
+        title: "Fix the board",
+      }),
+    ).toBe("/opsx:propose Fix the board - Fix the board");
+  });
+
+  it("fills {task} with the stored details", () => {
+    expect(
+      substituteBoardPromptPlaceholders("Task: {task}", {
+        title: "Fix the board",
+        details: "Cards dropped on Planning must send the full brief.",
+      }),
+    ).toBe("Task: Cards dropped on Planning must send the full brief.");
+  });
+
+  it("substitutes both placeholders in one template", () => {
+    expect(
+      substituteBoardPromptPlaceholders("{title}\n\n{task}", {
+        title: "Fix the board",
+        details: "Full brief",
+      }),
+    ).toBe("Fix the board\n\nFull brief");
+  });
+
+  it("falls back to the title when details are missing or blank", () => {
+    expect(substituteBoardPromptPlaceholders("{task}", { title: "Fix the board" })).toBe(
+      "Fix the board",
+    );
+    expect(
+      substituteBoardPromptPlaceholders("{task}", { title: "Fix the board", details: "   " }),
+    ).toBe("Fix the board");
+    expect(
+      substituteBoardPromptPlaceholders("{task}", { title: "Fix the board", details: null }),
+    ).toBe("Fix the board");
   });
 });
 

@@ -45,7 +45,7 @@ export const BOARD_TRANSITION_PROMPTS: ReadonlyArray<{
 
 export const DEFAULT_BOARD_PROMPTS: Record<BoardTransitionPromptKey, string> = {
   backlogToPlanning:
-    "Plan the task described by this thread's title. Propose a concrete plan; do not implement anything yet.",
+    "Plan the following task and propose a concrete plan; do not implement anything yet.\n\nTask: {task}",
   planningToRunning: "Proceed: implement the proposed plan.",
   reviewToPlanning:
     "Re-plan: review this thread's work and outcome so far and propose a revised plan addressing the problems or feedback. Do not implement anything yet.",
@@ -65,9 +65,9 @@ export const BOARD_PROMPT_PRESETS: ReadonlyArray<{
     id: "openspec",
     label: "OpenSpec",
     prompts: {
-      backlogToPlanning: "/opsx:propose {title}",
+      backlogToPlanning: "/opsx:propose {task}",
       planningToRunning: "/opsx:apply",
-      reviewToPlanning: "/opsx:propose {title}",
+      reviewToPlanning: "/opsx:propose {task}",
       reviewToRunning: "/opsx:apply",
     },
   },

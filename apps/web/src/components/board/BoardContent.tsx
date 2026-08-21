@@ -17,6 +17,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 import { useBoardPromptsStore } from "~/boardPromptsStore";
+import {
+  boardTaskMetaKey,
+  resolvePromptsForThread,
+  useBoardTaskMetaStore,
+} from "~/boardTaskMetaStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { useThreadActions } from "~/hooks/useThreadActions";
@@ -41,8 +46,9 @@ import {
   isBoardTransitionAllowed,
   resolveBoardColumn,
   resolveDoneReturnColumn,
+  substituteBoardPromptPlaceholders,
 } from "./boardColumns.logic";
-import { BoardBacklogDialog } from "./BoardBacklogDialog";
+import { BoardBacklogDialog, type BoardBacklogTaskDraft } from "./BoardBacklogDialog";
 import { BoardCard, type BoardCardDragData, BoardCardPreview } from "./BoardCard";
 import { BoardPromptsEditor } from "./BoardPromptsEditor";
 
@@ -188,6 +194,8 @@ export function BoardContent({
     confirmAndDeleteThread,
   } = useThreadActions();
   const boardPrompts = useBoardPromptsStore((state) => state.prompts);
+  const taskMeta = useBoardTaskMetaStore((state) => state.metaByThreadKey);
+  const setTaskMeta = useBoardTaskMetaStore((state) => state.setTaskMeta);
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const [backlogDialogOpen, setBacklogDialogOpen] = useState(false);
@@ -377,7 +385,14 @@ export function BoardContent({
   );
 
   const startThreadTurn = useCallback(
-    (thread: SidebarThreadSummary, text: string, interactionMode: "default" | "plan") => {
+    (
+      thread: SidebarThreadSummary,
+      text: string,
+      interactionMode: "default" | "plan",
+      // The card's stored details, kept after use so a later re-plan drop
+      // sends the same task text again.
+      details?: string | undefined,
+    ) => {
       void startTurn({
         environmentId: thread.environmentId,
         input: {
@@ -385,9 +400,7 @@ export function BoardContent({
           message: {
             messageId: newMessageId(),
             role: "user",
-            // Prompts address a card by name: "{title}" is the only
-            // placeholder, so a prompt can carry the task into a slash command.
-            text: text.replaceAll("{title}", thread.title),
+            text: substituteBoardPromptPlaceholders(text, { title: thread.title, details }),
             attachments: [],
           },
           runtimeMode: thread.runtimeMode ?? "auto",
@@ -441,27 +454,30 @@ export function BoardContent({
       // A turn already in flight cannot be pushed into a new one.
       const busy = thread.session?.status === "running" || thread.session?.status === "starting";
       if (busy) return;
+      // A task picked its own workflow at creation time; otherwise the board's.
+      const meta = taskMeta[boardTaskMetaKey(thread.environmentId, thread.id)];
+      const prompts = resolvePromptsForThread(meta, boardPrompts);
       if (from === "backlog" && target === "planning") {
-        startThreadTurn(thread, boardPrompts.backlogToPlanning, "plan");
+        startThreadTurn(thread, prompts.backlogToPlanning, "plan", meta?.details);
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "planning") {
-        startThreadTurn(thread, boardPrompts.reviewToPlanning, "plan");
+        startThreadTurn(thread, prompts.reviewToPlanning, "plan", meta?.details);
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "running") {
-        startThreadTurn(thread, boardPrompts.reviewToRunning, "default");
+        startThreadTurn(thread, prompts.reviewToRunning, "default", meta?.details);
         pinColumn(thread, "running");
         return;
       }
       if (from === "planning" && target === "running") {
-        startThreadTurn(thread, boardPrompts.planningToRunning, "default");
+        startThreadTurn(thread, prompts.planningToRunning, "default", meta?.details);
         pinColumn(thread, "running");
       }
     },
-    [activeDrag, settle, unsettle, startThreadTurn, pinColumn, boardPrompts],
+    [activeDrag, settle, unsettle, startThreadTurn, pinColumn, boardPrompts, taskMeta],
   );
 
   // A single-project scope pins the new task to it; otherwise the contextual
@@ -512,12 +528,15 @@ export function BoardContent({
   const openBacklogDialog = useCallback(() => setBacklogDialogOpen(true), []);
 
   const createBacklogTask = useCallback(
-    (title: string) => {
+    ({ title, details, presetId }: BoardBacklogTaskDraft) => {
       if (!newTaskProject || !newTaskModelSelection) return;
+      // The id is minted here so the task's client-local metadata can attach
+      // to the thread the create command is about to produce.
+      const threadId = newThreadId();
       void createThread({
         environmentId: newTaskProject.environmentId,
         input: {
-          threadId: newThreadId(),
+          threadId,
           projectId: newTaskProject.id,
           title,
           modelSelection: newTaskModelSelection,
@@ -527,8 +546,14 @@ export function BoardContent({
           worktreePath: null,
         },
       });
+      if (details || presetId) {
+        setTaskMeta(boardTaskMetaKey(newTaskProject.environmentId, threadId), {
+          details: details || undefined,
+          presetId: presetId ?? undefined,
+        });
+      }
     },
-    [createThread, newTaskProject, newTaskModelSelection],
+    [createThread, newTaskProject, newTaskModelSelection, setTaskMeta],
   );
 
   if (!bootstrapped && threads.length === 0) {

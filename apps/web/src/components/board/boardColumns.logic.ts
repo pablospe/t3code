@@ -21,6 +21,19 @@ export const BOARD_COLUMNS: ReadonlyArray<BoardColumnDefinition> = [
   { key: "done", title: "Done", emptyHint: "Settled threads land here" },
 ];
 
+/** Prompts address a card by its content: "{title}" is the card's title and
+    "{task}" its stored details, falling back to the title when a card carries
+    none - so a title-only task still reads sensibly inside a slash command. */
+export function substituteBoardPromptPlaceholders(
+  template: string,
+  input: { title: string; details?: string | null | undefined },
+): string {
+  const details = input.details?.trim();
+  return template
+    .replaceAll("{title}", input.title)
+    .replaceAll("{task}", details ? details : input.title);
+}
+
 export type BoardThreadInput = Pick<
   SidebarThreadSummary,
   | "archivedAt"
