@@ -11,12 +11,13 @@ import {
 } from "@dnd-kit/core";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { PlusIcon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { ArchiveIcon, PlusIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
+import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { useThreadActions } from "~/hooks/useThreadActions";
 import { useProjectScopeStore } from "~/projectScopeStore";
 import {
@@ -24,39 +25,70 @@ import {
   useProjects,
   useThreadShells,
 } from "~/state/entities";
+import { threadEnvironment } from "~/state/threads";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import type { SidebarThreadSummary } from "~/types";
 
+import { cn, newMessageId } from "~/lib/utils";
+
 import type { SnoozePreset } from "../Sidebar.snooze";
-import { type BoardColumn, groupThreadsIntoBoardColumns } from "./boardColumns.logic";
+import {
+  type BoardColumn,
+  type BoardColumnKey,
+  groupThreadsIntoBoardColumns,
+  isBoardTransitionAllowed,
+  resolveBoardColumn,
+} from "./boardColumns.logic";
 import { BoardCard, type BoardCardDragData, BoardCardPreview } from "./BoardCard";
 
 const boardKey = (environmentId: string, id: string) => `${environmentId}:${id}`;
 
+const PLAN_KICKOFF_MESSAGE =
+  "Plan the task described by this thread's title. Propose a concrete plan; do not implement anything yet.";
+const EXECUTE_PLAN_MESSAGE = "Proceed: implement the proposed plan.";
+
 function BoardColumnSection({
   column,
+  dragFrom,
   projectTitles,
   onOpen,
   onSettle,
   onUnsettle,
+  onArchive,
   onSnooze,
+  onContextMenu,
   onNewThread,
+  onArchiveAll,
 }: {
   column: BoardColumn<SidebarThreadSummary>;
+  dragFrom: BoardColumnKey | null;
   projectTitles: ReadonlyMap<string, string>;
   onOpen: (thread: SidebarThreadSummary) => void;
   onSettle: (thread: SidebarThreadSummary) => void;
   onUnsettle: (thread: SidebarThreadSummary) => void;
+  onArchive: (thread: SidebarThreadSummary) => void;
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
+  onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
   onNewThread: (() => void) | null;
+  onArchiveAll: ((threads: ReadonlyArray<SidebarThreadSummary>) => void) | null;
 }) {
-  const { isOver, setNodeRef } = useDroppable({ id: column.definition.key });
+  const validTarget =
+    dragFrom !== null && isBoardTransitionAllowed(dragFrom, column.definition.key);
+  const { isOver, setNodeRef } = useDroppable({
+    id: column.definition.key,
+    disabled: dragFrom !== null && !validTarget,
+  });
   return (
     <section
       ref={setNodeRef}
-      className={`flex h-full min-w-64 flex-1 basis-0 flex-col rounded-xl bg-accent/30 ${
-        isOver ? "ring-1 ring-ring" : ""
-      }`}
+      className={cn(
+        "flex h-full min-w-64 flex-1 basis-0 flex-col rounded-xl bg-accent/30 transition-opacity",
+        // While a drag is live, only legal targets stay interactive; the rest
+        // fade so the decision tree is visible before the drop.
+        dragFrom !== null && !validTarget && "opacity-35",
+        isOver && validTarget && "ring-1 ring-ring",
+      )}
     >
       <header className="flex shrink-0 items-center justify-between px-3 py-2">
         <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -72,6 +104,17 @@ function BoardColumnSection({
               className="flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <PlusIcon className="size-3.5" />
+            </button>
+          ) : null}
+          {onArchiveAll && column.threads.length > 0 ? (
+            <button
+              type="button"
+              aria-label="Archive all settled threads"
+              title="Archive all"
+              onClick={() => onArchiveAll(column.threads)}
+              className="flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <ArchiveIcon className="size-3.5" />
             </button>
           ) : null}
           {column.threads.length}
@@ -90,7 +133,9 @@ function BoardColumnSection({
             onOpen={onOpen}
             onSettle={onSettle}
             onUnsettle={onUnsettle}
+            onArchive={onArchive}
             onSnooze={onSnooze}
+            onContextMenu={onContextMenu}
           />
         ))}
         {column.threads.length === 0 ? (
@@ -114,8 +159,16 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   const navigate = useNavigate();
   const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
   const { handleNewThread, defaultProjectRef } = useHandleNewThread();
-  const { settleThread, unsettleThread, snoozeThread } = useThreadActions();
-  const [activeDrag, setActiveDrag] = useState<SidebarThreadSummary | null>(null);
+  const { settleThread, unsettleThread, snoozeThread, archiveThread } = useThreadActions();
+  const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const [activeDrag, setActiveDrag] = useState<{
+    thread: SidebarThreadSummary;
+    column: BoardColumnKey;
+  } | null>(null);
+  // Optimistic column pins: a dropped card lands in its target immediately
+  // while the lifecycle command round-trips; the pin clears once the derived
+  // column catches up (or the thread changes again).
+  const [columnPins, setColumnPins] = useState<ReadonlyMap<string, BoardColumnKey>>(new Map());
   // The 6px activation distance keeps plain clicks working even though the
   // drag listeners sit on the whole card.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -132,13 +185,35 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
 
   const projectTitles = useMemo(() => {
     const titles = new Map<string, string>();
-    for (const projectShell of projects) {
-      titles.set(boardKey(projectShell.environmentId, projectShell.id), projectShell.title);
+    for (const project of projects) {
+      titles.set(boardKey(project.environmentId, project.id), project.title);
     }
     return titles;
   }, [projects]);
 
-  const columns = useMemo(() => groupThreadsIntoBoardColumns(filteredThreads), [filteredThreads]);
+  useEffect(() => {
+    if (columnPins.size === 0) return;
+    let changed = false;
+    const next = new Map(columnPins);
+    for (const thread of threads) {
+      const key = boardKey(thread.environmentId, thread.id);
+      const pinned = next.get(key);
+      if (pinned && resolveBoardColumn(thread) === pinned) {
+        next.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) setColumnPins(next);
+  }, [threads, columnPins]);
+
+  const columns = useMemo(
+    () =>
+      groupThreadsIntoBoardColumns(
+        filteredThreads,
+        (thread) => columnPins.get(boardKey(thread.environmentId, thread.id)) ?? null,
+      ),
+    [filteredThreads, columnPins],
+  );
 
   const openThread = useCallback(
     (thread: SidebarThreadSummary) => {
@@ -149,6 +224,52 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
     },
     [navigate],
   );
+
+  // One context menu for the whole board: the card sets the target, the
+  // effect opens the sidebar-equivalent thread menu at the pointer.
+  const [menuTarget, setMenuTarget] = useState<{
+    thread: SidebarThreadSummary;
+    position: { x: number; y: number };
+    openedAt: number;
+  } | null>(null);
+  const menuThreadRef = menuTarget
+    ? scopeThreadRef(menuTarget.thread.environmentId, menuTarget.thread.id)
+    : null;
+  const menuProjectCwd = menuTarget
+    ? (projects.find(
+        (project) =>
+          project.id === menuTarget.thread.projectId &&
+          project.environmentId === menuTarget.thread.environmentId,
+      )?.workspaceRoot ?? null)
+    : null;
+  const { openMenu } = useThreadActionMenu({
+    threadRef: menuThreadRef,
+    projectCwd: menuProjectCwd,
+    changeRequestState: null,
+    // The board has no inline rename; the thread header does, so go there.
+    onStartRename: () => {
+      if (menuTarget) openThread(menuTarget.thread);
+    },
+  });
+  const lastOpenedMenuAt = useRef(0);
+  useEffect(() => {
+    if (menuTarget && menuTarget.openedAt !== lastOpenedMenuAt.current) {
+      lastOpenedMenuAt.current = menuTarget.openedAt;
+      openMenu(menuTarget.position);
+    }
+  }, [menuTarget, openMenu]);
+  const showCardContextMenu = useCallback(
+    (thread: SidebarThreadSummary, position: { x: number; y: number }) => {
+      setMenuTarget({ thread, position, openedAt: Date.now() });
+    },
+    [],
+  );
+
+  const pinColumn = useCallback((thread: SidebarThreadSummary, column: BoardColumnKey) => {
+    setColumnPins((previous) =>
+      new Map(previous).set(boardKey(thread.environmentId, thread.id), column),
+    );
+  }, []);
 
   const settle = useCallback(
     (thread: SidebarThreadSummary) => {
@@ -162,6 +283,20 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
     },
     [unsettleThread],
   );
+  const archive = useCallback(
+    (thread: SidebarThreadSummary) => {
+      void archiveThread(scopeThreadRef(thread.environmentId, thread.id));
+    },
+    [archiveThread],
+  );
+  const archiveAll = useCallback(
+    (columnThreads: ReadonlyArray<SidebarThreadSummary>) => {
+      for (const thread of columnThreads) {
+        void archiveThread(scopeThreadRef(thread.environmentId, thread.id));
+      }
+    },
+    [archiveThread],
+  );
   const snooze = useCallback(
     (thread: SidebarThreadSummary, preset: SnoozePreset) => {
       void snoozeThread(scopeThreadRef(thread.environmentId, thread.id), preset.snoozedUntil);
@@ -169,35 +304,77 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
     [snoozeThread],
   );
 
+  const startThreadTurn = useCallback(
+    (thread: SidebarThreadSummary, text: string, interactionMode: "default" | "plan") => {
+      void startTurn({
+        environmentId: thread.environmentId,
+        input: {
+          threadId: thread.id,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text,
+            attachments: [],
+          },
+          runtimeMode: thread.runtimeMode ?? "auto",
+          interactionMode,
+        },
+      });
+    },
+    [startTurn],
+  );
+
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
       const data = event.active.data.current as BoardCardDragData | undefined;
       if (!data) return;
-      setActiveDrag(
-        filteredThreads.find(
-          (thread) => thread.id === data.threadId && thread.environmentId === data.environmentId,
-        ) ?? null,
+      const thread = filteredThreads.find(
+        (candidate) =>
+          candidate.id === data.threadId && candidate.environmentId === data.environmentId,
       );
+      setActiveDrag(thread ? { thread, column: data.column } : null);
     },
     [filteredThreads],
   );
 
-  // Drops map onto the two lifecycle commands that exist: into Done = settle,
-  // out of Done = unsettle. Every other move has no server meaning and snaps back.
+  // Drops execute the decision tree: into Done settles (deferred while the
+  // thread still runs - the server settles it once quiet), out of Done
+  // unsettles, Backlog->Planning starts a native plan-mode turn, and
+  // Planning->Running starts the execution turn. Anything else was already
+  // rejected by the droppable gating.
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
+      const dragged = activeDrag;
       setActiveDrag(null);
-      const target = event.over?.id;
-      const data = event.active.data.current as BoardCardDragData | undefined;
-      if (!target || !data) return;
-      const ref = scopeThreadRef(data.environmentId, data.threadId);
-      if (target === "done" && data.column !== "done") {
-        void settleThread(ref);
-      } else if (target !== "done" && data.column === "done") {
-        void unsettleThread(ref);
+      const target = event.over?.id as BoardColumnKey | undefined;
+      if (!dragged || !target) return;
+      const { thread, column: from } = dragged;
+      if (!isBoardTransitionAllowed(from, target)) return;
+
+      if (target === "done") {
+        settle(thread);
+        pinColumn(thread, "done");
+        return;
+      }
+      if (from === "done") {
+        unsettle(thread);
+        return;
+      }
+      const busy = thread.session?.status === "running" || thread.session?.status === "starting";
+      if (from === "backlog" && target === "planning") {
+        if (busy) return;
+        startThreadTurn(thread, PLAN_KICKOFF_MESSAGE, "plan");
+        pinColumn(thread, "planning");
+        return;
+      }
+      if (from === "planning" && target === "running") {
+        // A planning turn still in flight cannot be pushed into execution.
+        if (busy) return;
+        startThreadTurn(thread, EXECUTE_PLAN_MESSAGE, "default");
+        pinColumn(thread, "running");
       }
     },
-    [settleThread, unsettleThread],
+    [activeDrag, settle, unsettle, startThreadTurn, pinColumn],
   );
 
   const newThreadInScope = useCallback(() => {
@@ -245,22 +422,29 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
           <BoardColumnSection
             key={column.definition.key}
             column={column}
+            dragFrom={activeDrag?.column ?? null}
             projectTitles={projectTitles}
             onOpen={openThread}
             onSettle={settle}
             onUnsettle={unsettle}
+            onArchive={archive}
             onSnooze={snooze}
+            onContextMenu={showCardContextMenu}
             onNewThread={column.definition.key === "backlog" ? newThreadInScope : null}
+            onArchiveAll={column.definition.key === "done" ? archiveAll : null}
           />
         ))}
       </div>
-      <DragOverlay>
+      {/* dropAnimation off: the source card never moved (the overlay is the
+          dragged visual), so the default snap-back reads as a glitch. */}
+      <DragOverlay dropAnimation={null}>
         {activeDrag ? (
           <BoardCardPreview
-            thread={activeDrag}
+            thread={activeDrag.thread}
             projectTitle={
-              projectTitles.get(boardKey(activeDrag.environmentId, activeDrag.projectId)) ??
-              "Unknown project"
+              projectTitles.get(
+                boardKey(activeDrag.thread.environmentId, activeDrag.thread.projectId),
+              ) ?? "Unknown project"
             }
           />
         ) : null}

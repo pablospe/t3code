@@ -1,5 +1,5 @@
 import { useDraggable } from "@dnd-kit/core";
-import { CheckIcon, ClockIcon, Undo2Icon } from "lucide-react";
+import { ArchiveIcon, CheckIcon, ClockIcon, Undo2Icon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { useClientSettings } from "~/hooks/useSettings";
@@ -87,7 +87,9 @@ function BoardCardImpl({
   onOpen,
   onSettle,
   onUnsettle,
+  onArchive,
   onSnooze,
+  onContextMenu,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string;
@@ -95,7 +97,9 @@ function BoardCardImpl({
   onOpen: (thread: SidebarThreadSummary) => void;
   onSettle: (thread: SidebarThreadSummary) => void;
   onUnsettle: (thread: SidebarThreadSummary) => void;
+  onArchive: (thread: SidebarThreadSummary) => void;
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
+  onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -128,6 +132,11 @@ function BoardCardImpl({
       onKeyDown={(event) => {
         if (event.key === "Enter" && event.target === event.currentTarget) onOpen(thread);
       }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onContextMenu(thread, { x: event.clientX, y: event.clientY });
+      }}
       {...listeners}
       className={cn(
         CARD_FRAME_CLASS,
@@ -147,18 +156,32 @@ function BoardCardImpl({
         )}
       >
         {column === "done" ? (
-          <button
-            type="button"
-            aria-label="Unsettle thread"
-            title="Unsettle"
-            onClick={(event) => {
-              event.stopPropagation();
-              onUnsettle(thread);
-            }}
-            className={ACTION_BUTTON_CLASS}
-          >
-            <Undo2Icon className="size-3.5" />
-          </button>
+          <>
+            <button
+              type="button"
+              aria-label="Unsettle thread"
+              title="Unsettle"
+              onClick={(event) => {
+                event.stopPropagation();
+                onUnsettle(thread);
+              }}
+              className={ACTION_BUTTON_CLASS}
+            >
+              <Undo2Icon className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Archive thread"
+              title="Archive"
+              onClick={(event) => {
+                event.stopPropagation();
+                onArchive(thread);
+              }}
+              className={ACTION_BUTTON_CLASS}
+            >
+              <ArchiveIcon className="size-3.5" />
+            </button>
+          </>
         ) : (
           <>
             <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>

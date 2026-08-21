@@ -36,36 +36,37 @@ export type BoardThreadInput = Pick<
 
 // The board stores nothing: every column is derived from the shell projection
 // the sidebar already renders, so all clients agree without new state.
-// Precedence deliberately checks attention and activity before the explicit
-// settle override, mirroring effectiveSettled's rule that blocked or running
-// work stays visible regardless of overrides.
+// Precedence deliberately checks attention before the explicit settle
+// override, mirroring effectiveSettled's rule that blocked work stays
+// visible regardless of overrides. Plan-phase threads stay in Planning even
+// while their planning turn runs, so a card dropped there does not bounce
+// to Running.
 export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
   if (thread.archivedAt !== null) {
     return "done";
   }
 
   const status = resolveSidebarThreadStatus(thread);
-  if (status === "working" || status === "monitoring") {
-    return "running";
-  }
   if (status === "approval" || status === "input" || status === "failed") {
     return "review";
   }
 
-  if (thread.settledOverride === "settled") {
+  const active = status === "working" || status === "monitoring";
+  if (thread.settledOverride === "settled" && !active) {
     return "done";
   }
 
   // Planning keys on the NATIVE signal first: an actionable proposed plan is
   // captured from the provider's own plan flow (Claude's ExitPlanMode)
   // regardless of T3's legacy thread mode. The interaction-mode check keeps
-  // legacy plan-mode threads here too for users with the beta flag on.
-  // Attention states (approval/input) still route to review above.
-  if (
-    thread.hasActionableProposedPlan ||
-    (thread.interactionMode === "plan" && thread.latestTurn !== null)
-  ) {
+  // plan-phase threads (started via plan-mode turns) here too, including
+  // while the planning turn itself is running.
+  if (thread.hasActionableProposedPlan || thread.interactionMode === "plan") {
     return "planning";
+  }
+
+  if (active) {
+    return "running";
   }
 
   if (thread.latestTurn === null) {
@@ -73,6 +74,21 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
   }
 
   return "review";
+}
+
+// The drag decision tree: forward transitions only, plus dragging out of
+// Done as the reverse door (unsettle). Everything else is inert - a drop
+// with no server-side meaning must read as inactive, not silently fail.
+const BOARD_TRANSITIONS: Record<BoardColumnKey, ReadonlyArray<BoardColumnKey>> = {
+  backlog: ["planning", "done"],
+  planning: ["running", "done"],
+  running: ["done"],
+  review: ["done"],
+  done: ["backlog", "planning", "running", "review"],
+};
+
+export function isBoardTransitionAllowed(from: BoardColumnKey, to: BoardColumnKey): boolean {
+  return from !== to && BOARD_TRANSITIONS[from].includes(to);
 }
 
 export interface BoardColumn<T extends BoardThreadInput> {
@@ -85,8 +101,11 @@ type SortableBoardThread = BoardThreadInput &
 
 // Columns order by most recent activity so the top of each lane is the thread
 // you touched last; id breaks ties to keep the order stable across renders.
+// resolveOverride lets the caller pin a thread to a column optimistically
+// while a lifecycle command round-trips.
 export function groupThreadsIntoBoardColumns<T extends SortableBoardThread>(
   threads: ReadonlyArray<T>,
+  resolveOverride?: (thread: T) => BoardColumnKey | null,
 ): ReadonlyArray<BoardColumn<T>> {
   const byColumn: Record<BoardColumnKey, T[]> = {
     backlog: [],
@@ -96,7 +115,7 @@ export function groupThreadsIntoBoardColumns<T extends SortableBoardThread>(
     done: [],
   };
   for (const thread of threads) {
-    byColumn[resolveBoardColumn(thread)].push(thread);
+    byColumn[resolveOverride?.(thread) ?? resolveBoardColumn(thread)].push(thread);
   }
   const activityMs = (thread: T) =>
     firstValidTimestampMs(thread.latestUserMessageAt, thread.updatedAt, thread.createdAt);

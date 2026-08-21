@@ -5,6 +5,7 @@ import type { SidebarThreadSummary } from "~/types";
 import {
   BOARD_COLUMNS,
   groupThreadsIntoBoardColumns,
+  isBoardTransitionAllowed,
   resolveBoardColumn,
 } from "./boardColumns.logic";
 
@@ -101,13 +102,19 @@ describe("resolveBoardColumn", () => {
     expect(resolveBoardColumn(thread)).toBe("planning");
   });
 
-  it("plan-mode threads still follow running and backlog rules", () => {
+  it("keeps plan-phase threads in planning even while running or unstarted", () => {
     expect(
       resolveBoardColumn(
         makeThread({ interactionMode: "plan", session: makeSession("running", "turn-1") }),
       ),
-    ).toBe("running");
-    expect(resolveBoardColumn(makeThread({ interactionMode: "plan" }))).toBe("backlog");
+    ).toBe("planning");
+    expect(resolveBoardColumn(makeThread({ interactionMode: "plan" }))).toBe("planning");
+  });
+
+  it("routes plan-phase attention states to review", () => {
+    expect(
+      resolveBoardColumn(makeThread({ interactionMode: "plan", hasPendingApprovals: true })),
+    ).toBe("review");
   });
 
   it("puts threads that never ran a turn in backlog", () => {
@@ -116,6 +123,28 @@ describe("resolveBoardColumn", () => {
 
   it("puts quiet threads with a finished turn in review", () => {
     expect(resolveBoardColumn(makeThread({ latestTurn: completedTurn }))).toBe("review");
+  });
+});
+
+describe("isBoardTransitionAllowed", () => {
+  it("follows the forward decision tree", () => {
+    expect(isBoardTransitionAllowed("backlog", "planning")).toBe(true);
+    expect(isBoardTransitionAllowed("backlog", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("backlog", "running")).toBe(false);
+    expect(isBoardTransitionAllowed("backlog", "review")).toBe(false);
+    expect(isBoardTransitionAllowed("planning", "running")).toBe(true);
+    expect(isBoardTransitionAllowed("planning", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("planning", "backlog")).toBe(false);
+    expect(isBoardTransitionAllowed("running", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("running", "review")).toBe(false);
+    expect(isBoardTransitionAllowed("review", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("review", "running")).toBe(false);
+  });
+
+  it("allows dragging out of done anywhere as the reverse door", () => {
+    expect(isBoardTransitionAllowed("done", "review")).toBe(true);
+    expect(isBoardTransitionAllowed("done", "backlog")).toBe(true);
+    expect(isBoardTransitionAllowed("done", "done")).toBe(false);
   });
 });
 
