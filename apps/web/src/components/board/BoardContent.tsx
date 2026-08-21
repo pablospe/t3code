@@ -166,9 +166,13 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
     column: BoardColumnKey;
   } | null>(null);
   // Optimistic column pins: a dropped card lands in its target immediately
-  // while the lifecycle command round-trips; the pin clears once the derived
-  // column catches up (or the thread changes again).
-  const [columnPins, setColumnPins] = useState<ReadonlyMap<string, BoardColumnKey>>(new Map());
+  // while the lifecycle command round-trips. A pin exists ONLY to bridge that
+  // round-trip: it clears when the derived column catches up and expires on
+  // its own regardless, so a rejected or deferred command can never leave the
+  // board lying about where a thread is.
+  const [columnPins, setColumnPins] = useState<
+    ReadonlyMap<string, { column: BoardColumnKey; expiresAt: number }>
+  >(new Map());
   // The 6px activation distance keeps plain clicks working even though the
   // drag listeners sit on the whole card.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -193,27 +197,37 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
 
   useEffect(() => {
     if (columnPins.size === 0) return;
-    let changed = false;
-    const next = new Map(columnPins);
-    for (const thread of threads) {
-      const key = boardKey(thread.environmentId, thread.id);
-      const pinned = next.get(key);
-      if (pinned && resolveBoardColumn(thread) === pinned) {
-        next.delete(key);
-        changed = true;
-      }
-    }
-    if (changed) setColumnPins(next);
+    const prune = () => {
+      setColumnPins((previous) => {
+        if (previous.size === 0) return previous;
+        const now = Date.now();
+        let changed = false;
+        const next = new Map(previous);
+        for (const [key, pin] of previous) {
+          const thread = threads.find(
+            (candidate) => boardKey(candidate.environmentId, candidate.id) === key,
+          );
+          if (pin.expiresAt <= now || !thread || resolveBoardColumn(thread) === pin.column) {
+            next.delete(key);
+            changed = true;
+          }
+        }
+        return changed ? next : previous;
+      });
+    };
+    prune();
+    const soonest = Math.min(...[...columnPins.values()].map((pin) => pin.expiresAt));
+    const timer = setTimeout(prune, Math.max(250, soonest - Date.now()));
+    return () => clearTimeout(timer);
   }, [threads, columnPins]);
 
-  const columns = useMemo(
-    () =>
-      groupThreadsIntoBoardColumns(
-        filteredThreads,
-        (thread) => columnPins.get(boardKey(thread.environmentId, thread.id)) ?? null,
-      ),
-    [filteredThreads, columnPins],
-  );
+  const columns = useMemo(() => {
+    const now = Date.now();
+    return groupThreadsIntoBoardColumns(filteredThreads, (thread) => {
+      const pin = columnPins.get(boardKey(thread.environmentId, thread.id));
+      return pin && pin.expiresAt > now ? pin.column : null;
+    });
+  }, [filteredThreads, columnPins]);
 
   const openThread = useCallback(
     (thread: SidebarThreadSummary) => {
@@ -266,8 +280,15 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   );
 
   const pinColumn = useCallback((thread: SidebarThreadSummary, column: BoardColumnKey) => {
+    // Blocked threads (pending approval/input) can't effectively change
+    // lifecycle - the command defers server-side - so pinning them would
+    // show a move that hasn't happened. Let the derived column tell the truth.
+    if (thread.hasPendingApprovals || thread.hasPendingUserInput) return;
     setColumnPins((previous) =>
-      new Map(previous).set(boardKey(thread.environmentId, thread.id), column),
+      new Map(previous).set(boardKey(thread.environmentId, thread.id), {
+        column,
+        expiresAt: Date.now() + 8_000,
+      }),
     );
   }, []);
 
