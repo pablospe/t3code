@@ -76,19 +76,31 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
   return "review";
 }
 
-// The drag decision tree: forward transitions only, plus dragging out of
-// Done as the reverse door (unsettle). Everything else is inert - a drop
-// with no server-side meaning must read as inactive, not silently fail.
+// The drag decision tree. Forward moves carry a default action; Review can
+// also loop back to Planning (rework starts with a revised plan). Review ->
+// Running is deliberately closed: a feedback-free "continue" is a vague
+// instruction, and real rework feedback is typed in the thread. Everything
+// else is inert - a drop with no server-side meaning must read as inactive.
 const BOARD_TRANSITIONS: Record<BoardColumnKey, ReadonlyArray<BoardColumnKey>> = {
   backlog: ["planning", "done"],
   planning: ["running", "done"],
   running: ["done"],
-  review: ["done"],
-  done: ["backlog", "planning", "running", "review"],
+  review: ["planning", "done"],
+  // Done is dynamic: its only legal target is the column the thread truly
+  // returns to when unsettled - see resolveDoneReturnColumn.
+  done: [],
 };
 
 export function isBoardTransitionAllowed(from: BoardColumnKey, to: BoardColumnKey): boolean {
   return from !== to && BOARD_TRANSITIONS[from].includes(to);
+}
+
+/** Where a Done card really lands when unsettled: the derivation with the
+    settle override ignored. Dragging Done anywhere else would show a move
+    the server cannot make, so only this target is offered. */
+export function resolveDoneReturnColumn(thread: BoardThreadInput): BoardColumnKey {
+  const unsettled = resolveBoardColumn({ ...thread, settledOverride: null, archivedAt: null });
+  return unsettled === "done" ? "review" : unsettled;
 }
 
 export interface BoardColumn<T extends BoardThreadInput> {

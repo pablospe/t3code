@@ -7,6 +7,7 @@ import {
   groupThreadsIntoBoardColumns,
   isBoardTransitionAllowed,
   resolveBoardColumn,
+  resolveDoneReturnColumn,
 } from "./boardColumns.logic";
 
 type TestThread = Parameters<typeof resolveBoardColumn>[0] &
@@ -138,13 +139,20 @@ describe("isBoardTransitionAllowed", () => {
     expect(isBoardTransitionAllowed("running", "done")).toBe(true);
     expect(isBoardTransitionAllowed("running", "review")).toBe(false);
     expect(isBoardTransitionAllowed("review", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("review", "planning")).toBe(true);
     expect(isBoardTransitionAllowed("review", "running")).toBe(false);
   });
 
-  it("allows dragging out of done anywhere as the reverse door", () => {
-    expect(isBoardTransitionAllowed("done", "review")).toBe(true);
-    expect(isBoardTransitionAllowed("done", "backlog")).toBe(true);
-    expect(isBoardTransitionAllowed("done", "done")).toBe(false);
+  it("routes done drags only to the true unsettle destination", () => {
+    expect(isBoardTransitionAllowed("done", "review")).toBe(false);
+    const settledReview = makeThread({ settledOverride: "settled", latestTurn: completedTurn });
+    expect(resolveDoneReturnColumn(settledReview)).toBe("review");
+    const settledPlan = makeThread({
+      settledOverride: "settled",
+      latestTurn: completedTurn,
+      interactionMode: "plan",
+    });
+    expect(resolveDoneReturnColumn(settledPlan)).toBe("planning");
   });
 });
 

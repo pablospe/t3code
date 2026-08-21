@@ -39,6 +39,7 @@ import {
   groupThreadsIntoBoardColumns,
   isBoardTransitionAllowed,
   resolveBoardColumn,
+  resolveDoneReturnColumn,
 } from "./boardColumns.logic";
 import { BoardCard, type BoardCardDragData, BoardCardPreview } from "./BoardCard";
 
@@ -47,10 +48,13 @@ const boardKey = (environmentId: string, id: string) => `${environmentId}:${id}`
 const PLAN_KICKOFF_MESSAGE =
   "Plan the task described by this thread's title. Propose a concrete plan; do not implement anything yet.";
 const EXECUTE_PLAN_MESSAGE = "Proceed: implement the proposed plan.";
+const REPLAN_MESSAGE =
+  "Re-plan: review this thread's work and outcome so far and propose a revised plan addressing the problems or feedback. Do not implement anything yet.";
 
 function BoardColumnSection({
   column,
   dragFrom,
+  dragReturn,
   projectTitles,
   onOpen,
   onSettle,
@@ -63,6 +67,8 @@ function BoardColumnSection({
 }: {
   column: BoardColumn<SidebarThreadSummary>;
   dragFrom: BoardColumnKey | null;
+  /** For drags out of Done: the single column unsettling really returns to. */
+  dragReturn: BoardColumnKey | null;
   projectTitles: ReadonlyMap<string, string>;
   onOpen: (thread: SidebarThreadSummary) => void;
   onSettle: (thread: SidebarThreadSummary) => void;
@@ -74,7 +80,10 @@ function BoardColumnSection({
   onArchiveAll: ((threads: ReadonlyArray<SidebarThreadSummary>) => void) | null;
 }) {
   const validTarget =
-    dragFrom !== null && isBoardTransitionAllowed(dragFrom, column.definition.key);
+    dragFrom !== null &&
+    (dragFrom === "done"
+      ? column.definition.key === dragReturn
+      : isBoardTransitionAllowed(dragFrom, column.definition.key));
   const { isOver, setNodeRef } = useDroppable({
     id: column.definition.key,
     disabled: dragFrom !== null && !validTarget,
@@ -360,7 +369,8 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
 
   // Drops execute the decision tree: into Done settles (deferred while the
   // thread still runs - the server settles it once quiet), out of Done
-  // unsettles, Backlog->Planning starts a native plan-mode turn, and
+  // unsettles back to its true column, Backlog->Planning starts a native
+  // plan-mode turn, Review->Planning starts a re-plan turn, and
   // Planning->Running starts the execution turn. Anything else was already
   // rejected by the droppable gating.
   const handleDragEnd = useCallback(
@@ -370,6 +380,13 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
       const target = event.over?.id as BoardColumnKey | undefined;
       if (!dragged || !target) return;
       const { thread, column: from } = dragged;
+
+      if (from === "done") {
+        // Unsettle only lands where the derivation says - the single target
+        // the droppable gating offered.
+        if (target === resolveDoneReturnColumn(thread)) unsettle(thread);
+        return;
+      }
       if (!isBoardTransitionAllowed(from, target)) return;
 
       if (target === "done") {
@@ -377,20 +394,20 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
         pinColumn(thread, "done");
         return;
       }
-      if (from === "done") {
-        unsettle(thread);
-        return;
-      }
+      // A turn already in flight cannot be pushed into a new one.
       const busy = thread.session?.status === "running" || thread.session?.status === "starting";
+      if (busy) return;
       if (from === "backlog" && target === "planning") {
-        if (busy) return;
         startThreadTurn(thread, PLAN_KICKOFF_MESSAGE, "plan");
         pinColumn(thread, "planning");
         return;
       }
+      if (from === "review" && target === "planning") {
+        startThreadTurn(thread, REPLAN_MESSAGE, "plan");
+        pinColumn(thread, "planning");
+        return;
+      }
       if (from === "planning" && target === "running") {
-        // A planning turn still in flight cannot be pushed into execution.
-        if (busy) return;
         startThreadTurn(thread, EXECUTE_PLAN_MESSAGE, "default");
         pinColumn(thread, "running");
       }
@@ -444,6 +461,9 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
             key={column.definition.key}
             column={column}
             dragFrom={activeDrag?.column ?? null}
+            dragReturn={
+              activeDrag?.column === "done" ? resolveDoneReturnColumn(activeDrag.thread) : null
+            }
             projectTitles={projectTitles}
             onOpen={openThread}
             onSettle={settle}
