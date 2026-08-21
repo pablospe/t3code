@@ -18,6 +18,7 @@ import { resolveShortcutCommand } from "../keybindings";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
+import { useLastOpenThreadStore } from "../lastOpenThreadStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
@@ -28,6 +29,13 @@ function ChatRouteGlobalShortcuts() {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const setLastOpenThreadRef = useLastOpenThreadStore((state) => state.setLastOpenThreadRef);
+  // Recorded here because this component stays mounted across every /_chat
+  // route, so the ref survives navigating to routes with no open thread
+  // (the full-page board reads it to highlight the card you came from).
+  useEffect(() => {
+    if (routeThreadRef) setLastOpenThreadRef(routeThreadRef);
+  }, [routeThreadRef, setLastOpenThreadRef]);
   const legacySidebarEnabled = useLegacySidebarEnabled();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();

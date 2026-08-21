@@ -20,6 +20,7 @@ import { resolvePromptsForThread, useBoardPromptsStore } from "~/boardPromptsSto
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { useThreadActions } from "~/hooks/useThreadActions";
+import { useLastOpenThreadStore } from "~/lastOpenThreadStore";
 import { useProjectScopeStore } from "~/projectScopeStore";
 import {
   useAllEnvironmentShellsBootstrapped,
@@ -187,6 +188,10 @@ export function BoardContent({
   const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
   const scope = scopeOverride !== undefined ? scopeOverride : scopedProjectKeys;
   const { defaultProjectRef, routeThreadRef } = useHandleNewThread();
+  // On the full-page board no thread route is active, so the highlight falls
+  // back to the thread you last had open - the card you came from.
+  const lastOpenThreadRef = useLastOpenThreadStore((state) => state.lastOpenThreadRef);
+  const selectedThreadRef = routeThreadRef ?? lastOpenThreadRef;
   const {
     settleThread,
     unsettleThread,
@@ -603,8 +608,8 @@ export function BoardContent({
                 activeDrag?.column === "done" ? resolveDoneReturnColumn(activeDrag.thread) : null
               }
               selectedThreadKey={
-                routeThreadRef
-                  ? boardKey(routeThreadRef.environmentId, routeThreadRef.threadId)
+                selectedThreadRef
+                  ? boardKey(selectedThreadRef.environmentId, selectedThreadRef.threadId)
                   : null
               }
               projectTitles={projectTitles}
