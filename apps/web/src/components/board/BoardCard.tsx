@@ -1,5 +1,4 @@
 import { useDraggable } from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
 import { CheckIcon, ClockIcon, Undo2Icon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
@@ -19,8 +18,67 @@ export interface BoardCardDragData {
   readonly column: BoardColumnKey;
 }
 
+const CARD_FRAME_CLASS = "w-full rounded-lg border border-border bg-card px-3 py-2 text-left";
+
 const ACTION_BUTTON_CLASS =
   "flex size-6 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground";
+
+function BoardCardBody({
+  thread,
+  projectTitle,
+}: {
+  thread: SidebarThreadSummary;
+  projectTitle: string;
+}) {
+  const pill = resolveThreadStatusPill({ thread });
+  const activityAt = firstValidTimestamp(
+    thread.latestUserMessageAt,
+    thread.updatedAt,
+    thread.createdAt,
+  );
+  return (
+    <>
+      <span className="block truncate pr-12 text-sm font-medium text-foreground">
+        {thread.title}
+      </span>
+      <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground/70">
+        <span className="truncate">{projectTitle}</span>
+        {thread.branch ? <span className="truncate">{thread.branch}</span> : null}
+        {activityAt ? (
+          <span className="ml-auto shrink-0">{formatRelativeTimeLabel(activityAt)}</span>
+        ) : null}
+      </span>
+      {pill ? (
+        <span className={cn("mt-1.5 flex items-center gap-1.5 text-xs", pill.colorClass)}>
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              pill.dotClass,
+              pill.pulse && "animate-status-pulse",
+            )}
+          />
+          {pill.label}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/** Rendered inside DragOverlay: a portal-level copy of the dragged card, so it
+    floats above every column instead of being clipped by its own lane. */
+export function BoardCardPreview({
+  thread,
+  projectTitle,
+}: {
+  thread: SidebarThreadSummary;
+  projectTitle: string;
+}) {
+  return (
+    <div className={cn(CARD_FRAME_CLASS, "w-64 shadow-lg")}>
+      <BoardCardBody thread={thread} projectTitle={projectTitle} />
+    </div>
+  );
+}
 
 function BoardCardImpl({
   thread,
@@ -53,18 +111,14 @@ function BoardCardImpl({
     column,
   };
   // dnd-kit's aria attributes are deliberately not spread, matching the
-  // sidebar's pinned-reorder convention; the card carries its own role.
-  const { setNodeRef, listeners, transform, isDragging } = useDraggable({
+  // sidebar's pinned-reorder convention; the card carries its own role. The
+  // dragged visual is a DragOverlay copy, so the source card stays in place,
+  // dimmed, rather than being transformed inside its clipping column.
+  const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `${thread.environmentId}:${thread.id}`,
     data: dragData,
   });
 
-  const pill = resolveThreadStatusPill({ thread });
-  const activityAt = firstValidTimestamp(
-    thread.latestUserMessageAt,
-    thread.updatedAt,
-    thread.createdAt,
-  );
   return (
     <div
       ref={setNodeRef}
@@ -74,38 +128,17 @@ function BoardCardImpl({
       onKeyDown={(event) => {
         if (event.key === "Enter" && event.target === event.currentTarget) onOpen(thread);
       }}
-      style={{ transform: CSS.Translate.toString(transform) }}
       {...listeners}
       className={cn(
-        "group/board-card relative w-full rounded-lg border border-border bg-card px-3 py-2 text-left transition-colors hover:bg-accent/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        CARD_FRAME_CLASS,
+        "group/board-card relative transition-colors hover:bg-accent/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
         // Offscreen cards skip style, layout and paint; a tall column costs
         // what the viewport shows. The intrinsic size keeps scrolling honest.
         "[contain-intrinsic-block-size:72px] [content-visibility:auto]",
-        isDragging && "z-20 opacity-80",
+        isDragging && "opacity-40",
       )}
     >
-      <span className="block truncate pr-12 text-sm font-medium text-foreground">
-        {thread.title}
-      </span>
-      <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground/70">
-        <span className="truncate">{projectTitle}</span>
-        {thread.branch ? <span className="truncate">{thread.branch}</span> : null}
-        {activityAt ? (
-          <span className="ml-auto shrink-0">{formatRelativeTimeLabel(activityAt)}</span>
-        ) : null}
-      </span>
-      {pill ? (
-        <span className={cn("mt-1.5 flex items-center gap-1.5 text-xs", pill.colorClass)}>
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              pill.dotClass,
-              pill.pulse && "animate-status-pulse",
-            )}
-          />
-          {pill.label}
-        </span>
-      ) : null}
+      <BoardCardBody thread={thread} projectTitle={projectTitle} />
       <span
         className={cn(
           "absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-card/90 opacity-0 transition-opacity",

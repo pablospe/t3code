@@ -1,4 +1,10 @@
-import { Maximize2Icon, Minimize2Icon, PanelBottomIcon, PanelRightIcon } from "lucide-react";
+import {
+  KanbanIcon,
+  Maximize2Icon,
+  Minimize2Icon,
+  PanelBottomIcon,
+  PanelRightIcon,
+} from "lucide-react";
 import { memo } from "react";
 
 import { Toggle } from "../ui/toggle";
@@ -14,6 +20,9 @@ interface PanelLayoutControlsProps {
   rightPanelShortcutLabel: string | null;
   /** Running + waiting subagents in this thread; badges the right panel toggle. */
   liveAgentCount: number;
+  /** The board drawer toggle renders only where a handler is provided. */
+  boardDrawerOpen?: boolean;
+  onToggleBoardDrawer?: () => void;
   onToggleTerminal: () => void;
   onToggleRightPanel: () => void;
 }
@@ -27,6 +36,8 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelOpen,
   rightPanelShortcutLabel,
   liveAgentCount,
+  boardDrawerOpen = false,
+  onToggleBoardDrawer,
   onToggleTerminal,
   onToggleRightPanel,
 }: PanelLayoutControlsProps) {
@@ -35,6 +46,25 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {onToggleBoardDrawer ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0 [-webkit-app-region:no-drag]"
+                pressed={boardDrawerOpen}
+                onPressedChange={onToggleBoardDrawer}
+                aria-label="Toggle board drawer"
+                variant="ghost"
+                size="sm"
+              >
+                <KanbanIcon className="size-4" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">Toggle board drawer</TooltipPopup>
+        </Tooltip>
+      ) : null}
       {showTerminalControl ? (
         <Tooltip>
           <TooltipTrigger
