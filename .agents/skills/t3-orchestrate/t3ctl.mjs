@@ -280,7 +280,7 @@ async function main() {
       output(
         threads.map((thread) => ({
           ...threadRow(thread, snapshot.projects),
-          ...(queue[thread.id]?.prompt ? { queuedPrompt: true } : {}),
+          ...(thread.taskDetails || queue[thread.id]?.prompt ? { queuedPrompt: true } : {}),
         })),
       );
       return;
@@ -405,11 +405,21 @@ async function main() {
         worktreePath: null,
         createdAt: new Date().toISOString(),
       });
-      if (prompt || wantWorktree) {
+      // The task prompt persists ON the thread (taskDetails), so every client
+      // sees it; the local queue only remembers wishes the server has no
+      // field for (worktree, start-time modes).
+      if (prompt) {
+        await dispatch({
+          type: "thread.meta.update",
+          commandId: randomUUID(),
+          threadId,
+          taskDetails: prompt,
+        });
+      }
+      if (wantWorktree || planMode) {
         const queue = readBacklogQueue();
         queue[threadId] = {
           title,
-          ...(prompt ? { prompt } : {}),
           planMode,
           mode,
           worktree: wantWorktree,
@@ -436,13 +446,15 @@ async function main() {
       const override = args.join(" ").trim();
       const queue = readBacklogQueue();
       const entry = queue[threadId];
-      const text = override || entry?.prompt;
-      if (!text)
-        fail(`no stored prompt for ${threadId}; pass a message: start <threadId> <message>`);
 
       const snapshot = await shellSnapshot();
       const thread = snapshot.threads.find((candidate) => candidate.id === threadId);
       if (!thread) fail(`thread ${threadId} not found`);
+      // Prompt priority: explicit override, the thread's server-synced
+      // taskDetails, then the legacy local queue.
+      const text = override || thread.taskDetails || entry?.prompt;
+      if (!text)
+        fail(`no stored prompt for ${threadId}; pass a message: start <threadId> <message>`);
 
       if (entry?.worktree && !thread.worktreePath) {
         const project = snapshot.projects.find((candidate) => candidate.id === thread.projectId);
