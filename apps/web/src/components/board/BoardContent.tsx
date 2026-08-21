@@ -1,10 +1,10 @@
 import {
-  closestCenter,
   DndContext,
   DragOverlay,
   type DragEndEvent,
   type DragStartEvent,
   PointerSensor,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
@@ -443,7 +443,11 @@ export function BoardContent({ compact = false }: { compact?: boolean } = {}) {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      // pointerWithin, not closestCenter: with the decision tree disabling
+      // most droppables, closestCenter turns the one legal column into a
+      // magnet that catches drops made anywhere. A drop must physically land
+      // inside a column to mean anything.
+      collisionDetection={pointerWithin}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveDrag(null)}
