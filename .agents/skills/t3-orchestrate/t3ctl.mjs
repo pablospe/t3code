@@ -16,6 +16,14 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const args = process.argv.slice(2);
+// Everything after a literal `--` is positional (prompt text), invisible to
+// flag parsing - otherwise a prompt mentioning "--mode" would be spliced
+// apart by takeFlag and corrupt both the prompt and the command.
+const positionalTail = (() => {
+  const separator = args.indexOf("--");
+  if (separator === -1) return [];
+  return args.splice(separator).slice(1);
+})();
 const cmd = args.shift();
 
 function fail(message) {
@@ -280,7 +288,11 @@ async function main() {
       output(
         threads.map((thread) => ({
           ...threadRow(thread, snapshot.projects),
-          ...(thread.taskDetails || queue[thread.id]?.prompt ? { queuedPrompt: true } : {}),
+          // Only unstarted threads truly have a queued prompt; details on a
+          // running or finished thread are reference text, not a queue entry.
+          ...(thread.latestTurn === null && (thread.taskDetails || queue[thread.id]?.prompt)
+            ? { queuedPrompt: true }
+            : {}),
         })),
       );
       return;
@@ -298,7 +310,7 @@ async function main() {
       // plan for approval instead of implementing.
       const planMode = takeBoolFlag("plan");
       const interactionMode = planMode ? "plan" : "default";
-      const prompt = args.join(" ").trim();
+      const prompt = [...args, ...positionalTail].join(" ").trim();
       if (!prompt) fail("prompt is required (last argument)");
 
       const snapshot = await shellSnapshot();
@@ -374,7 +386,7 @@ async function main() {
       const wantWorktree = takeBoolFlag("worktree");
       const baseBranch = takeFlag("base", "main");
       const modelOverride = takeFlag("model");
-      const prompt = args.join(" ").trim();
+      const prompt = [...args, ...positionalTail].join(" ").trim();
 
       const snapshot = await shellSnapshot();
       const project = resolveProject(snapshot.projects, projectSelector);
@@ -443,7 +455,7 @@ async function main() {
       // Deliver a queued backlog item: create its worktree if one was wished
       // for, send the stored prompt (or an override), and clear the queue.
       const threadId = args.shift() ?? fail("usage: start <threadId> [override message]");
-      const override = args.join(" ").trim();
+      const override = [...args, ...positionalTail].join(" ").trim();
       const queue = readBacklogQueue();
       const entry = queue[threadId];
 
@@ -495,7 +507,7 @@ async function main() {
 
     case "prompt": {
       const threadId = args.shift() ?? fail("usage: prompt <threadId> <message>");
-      const text = args.join(" ").trim();
+      const text = [...args, ...positionalTail].join(" ").trim();
       if (!text) fail("message is required");
       const snapshot = await shellSnapshot();
       const thread = snapshot.threads.find((candidate) => candidate.id === threadId);
@@ -554,7 +566,9 @@ async function main() {
         const status = threadStatus(thread);
         if (status !== "running") {
           output(threadRow(thread, snapshot.projects));
-          process.exit(status === "review" || status === "done" ? 0 : 2);
+          // "planning" is a successful terminal state for a plan-mode child:
+          // the turn finished and its proposed plan awaits approval.
+          process.exit(status === "review" || status === "done" || status === "planning" ? 0 : 2);
         }
         if (Date.now() > deadline) {
           output({ threadId, status: "timeout", waitedSeconds: timeoutS });
@@ -588,7 +602,8 @@ Commands:
   threads [--project <p>] [--all]            list threads with derived status
   spawn --project <p> --title <t> [opts] <prompt>
         opts: --base <branch=main> --branch <name> --mode <runtime=auto>
-              --model <instanceId>:<model> --no-worktree --no-setup
+              --model <instanceId>:<model> --no-worktree --plan
+        prompt text may follow a literal -- to protect flag-like words
   backlog --project <p> --title <t> [--plan] [--worktree] [--base main] [<prompt>]
         queue a task: thread created but not started; the prompt is stored
         and delivered by \`start\`

@@ -12,6 +12,7 @@ import { memo, useMemo, useState } from "react";
 
 import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
 import { useClientSettings } from "~/hooks/useSettings";
+import { readEnvironmentSupportsTaskDetails } from "~/state/entities";
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import type { SidebarThreadSummary } from "~/types";
@@ -248,7 +249,10 @@ function BoardCardImpl({
                 : "hover:bg-accent/60",
               // Offscreen cards skip style, layout and paint; a tall column costs
               // what the viewport shows. The intrinsic size keeps scrolling honest.
-              "[contain-intrinsic-block-size:72px] [content-visibility:auto]",
+              // 88px tracks a card's real rendered height (title + meta row +
+              // status row + padding + border); understating it makes long
+              // columns' scrollbars drift as offscreen cards materialize.
+              "[contain-intrinsic-block-size:88px] [content-visibility:auto]",
               // Snoozed cards recede like disabled controls but stay interactive;
               // hover restores enough contrast to read and act on them.
               snoozed && "opacity-50 hover:opacity-90",
@@ -261,7 +265,13 @@ function BoardCardImpl({
           thread={thread}
           projectTitle={projectTitle}
           snoozedWakeLabel={snoozedWakeLabel}
-          onEditTask={() => onEditTask(thread)}
+          // Older servers reject task fields; without the capability the icon
+          // stays a passive details indicator instead of a dead edit button.
+          onEditTask={
+            readEnvironmentSupportsTaskDetails(thread.environmentId)
+              ? () => onEditTask(thread)
+              : null
+          }
         />
         <span
           className={cn(

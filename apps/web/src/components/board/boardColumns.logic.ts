@@ -109,10 +109,9 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
 }
 
 // The drag decision tree. Forward moves carry a default action; Review can
-// also loop back to Planning (rework starts with a revised plan). Review ->
-// Running is deliberately closed: a feedback-free "continue" is a vague
-// instruction, and real rework feedback is typed in the thread. Everything
-// else is inert - a drop with no server-side meaning must read as inactive.
+// loop back to Planning (rework starts with a revised plan) or resume via
+// Running (a "continue, address the feedback" turn). Everything else is
+// inert - a drop with no server-side meaning must read as inactive.
 const BOARD_TRANSITIONS: Record<BoardColumnKey, ReadonlyArray<BoardColumnKey>> = {
   backlog: ["planning", "done"],
   planning: ["running", "done"],

@@ -50,6 +50,7 @@ export function BoardBacklogDialog({
   onOpenChange,
   projectTitle,
   modelAvailable,
+  taskFieldsSupported = true,
   initial = null,
   onSubmit,
 }: {
@@ -57,6 +58,9 @@ export function BoardBacklogDialog({
   onOpenChange: (open: boolean) => void;
   projectTitle: string | null;
   modelAvailable: boolean;
+  /** False when the target environment's server predates task fields: the
+      details and workflow inputs hide rather than silently not persisting. */
+  taskFieldsSupported?: boolean;
   /** When set, the dialog edits this task instead of creating one. */
   initial?: BoardBacklogTaskDraft | null;
   onSubmit: (task: BoardBacklogTaskDraft) => void;
@@ -108,15 +112,17 @@ export function BoardBacklogDialog({
               placeholder="What needs doing?"
               aria-label="Task title"
             />
-            <Textarea
-              value={details}
-              onChange={(event) => setDetails(event.target.value)}
-              rows={4}
-              placeholder="Full task description delivered when planning starts (optional)"
-              aria-label="Task details"
-              className="text-sm"
-            />
-            <div>
+            {taskFieldsSupported ? (
+              <Textarea
+                value={details}
+                onChange={(event) => setDetails(event.target.value)}
+                rows={4}
+                placeholder="Full task description delivered when planning starts (optional)"
+                aria-label="Task details"
+                className="text-sm"
+              />
+            ) : null}
+            <div hidden={!taskFieldsSupported}>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Workflow:</span>
                 <Select

@@ -23,6 +23,7 @@ import { useThreadActions } from "~/hooks/useThreadActions";
 import { useLastOpenThreadStore } from "~/lastOpenThreadStore";
 import { useProjectScopeStore } from "~/projectScopeStore";
 import {
+  readEnvironmentSupportsTaskDetails,
   useAllEnvironmentShellsBootstrapped,
   useProjects,
   useThreadShells,
@@ -217,6 +218,9 @@ export function BoardContent({
   } = useThreadActions();
   const boardPrompts = useBoardPromptsStore((state) => state.prompts);
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
+    reportFailure: false,
+  });
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -224,6 +228,20 @@ export function BoardContent({
   const [backlogDialogOpen, setBacklogDialogOpen] = useState(false);
   /** Thread whose task fields the dialog is editing; null means create mode. */
   const [editTask, setEditTask] = useState<SidebarThreadSummary | null>(null);
+  // Memoized on the captured thread: a fresh literal here would change
+  // identity on every board re-render (shell updates, the snooze tick), and
+  // the dialog's seed effect would wipe whatever the user is typing.
+  const editInitial = useMemo(
+    () =>
+      editTask
+        ? {
+            title: editTask.title,
+            details: editTask.taskDetails ?? "",
+            presetId: editTask.workflowPreset ?? null,
+          }
+        : null,
+    [editTask],
+  );
   const [activeDrag, setActiveDrag] = useState<{
     thread: SidebarThreadSummary;
     column: BoardColumnKey;
@@ -418,6 +436,21 @@ export function BoardContent({
       // sends the same task text again.
       details?: string | undefined,
     ) => {
+      // The decider deliberately ignores interactionMode on thread.turn.start
+      // and runs the thread's stored mode; switching modes is its own command
+      // (thread.interaction-mode.set), dispatched first exactly like the
+      // composer does. Commands are serialized per thread, so the order holds
+      // without awaiting.
+      if ((thread.interactionMode ?? "default") !== interactionMode) {
+        void setThreadInteractionMode({
+          environmentId: thread.environmentId,
+          input: {
+            threadId: thread.id,
+            interactionMode,
+            createdAt: new Date().toISOString(),
+          },
+        });
+      }
       void startTurn({
         environmentId: thread.environmentId,
         input: {
@@ -433,7 +466,7 @@ export function BoardContent({
         },
       });
     },
-    [startTurn],
+    [setThreadInteractionMode, startTurn],
   );
 
   const handleDragStart = useCallback(
@@ -573,8 +606,10 @@ export function BoardContent({
       });
       const trimmedDetails = details?.trim();
       // Nothing to say means no second command: a bare task rides the create
-      // alone rather than a no-op meta update.
+      // alone rather than a no-op meta update. Older servers reject the task
+      // fields outright (the dialog hides them, this is the backstop).
       if (!trimmedDetails && !presetId) return;
+      if (!readEnvironmentSupportsTaskDetails(newTaskProject.environmentId)) return;
       void updateThreadMetadata({
         environmentId: newTaskProject.environmentId,
         input: {
@@ -689,14 +724,12 @@ export function BoardContent({
         }}
         projectTitle={newTaskProject?.title ?? null}
         modelAvailable={newTaskProject !== null && newTaskModelSelection !== null}
-        initial={
+        initial={editInitial}
+        taskFieldsSupported={
           editTask
-            ? {
-                title: editTask.title,
-                details: editTask.taskDetails ?? "",
-                presetId: editTask.workflowPreset ?? null,
-              }
-            : null
+            ? readEnvironmentSupportsTaskDetails(editTask.environmentId)
+            : newTaskProject === null ||
+              readEnvironmentSupportsTaskDetails(newTaskProject.environmentId)
         }
         onSubmit={editTask ? saveTaskEdit : createBacklogTask}
       />
