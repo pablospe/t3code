@@ -63,6 +63,10 @@ function BoardCardBody({
     thread.updatedAt,
     thread.createdAt,
   );
+  // Only a pinned preset earns a chip: Default follows the board-wide
+  // prompts, so labeling it on every card would be noise, not signal.
+  const workflowLabel =
+    BOARD_PROMPT_PRESETS.find((preset) => preset.id === thread.workflowPreset)?.label ?? null;
   // Task details can run long, so the card reveals them on hover rather than
   // spending card height on text the board does not need to read.
   const detailsTooltip = thread.taskDetails
@@ -97,6 +101,14 @@ function BoardCardBody({
           // surface natively.
           <span className="flex shrink-0 items-center" title={detailsTooltip}>
             <FileTextIcon className="size-3" aria-label="Has task details" />
+          </span>
+        ) : null}
+        {workflowLabel !== null ? (
+          <span
+            className="shrink-0 rounded bg-accent px-1 text-[10px] leading-4 text-muted-foreground"
+            title={`Workflow: ${workflowLabel}`}
+          >
+            {workflowLabel}
           </span>
         ) : null}
         {activityAt ? (
