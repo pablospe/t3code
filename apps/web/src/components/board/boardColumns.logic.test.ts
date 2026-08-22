@@ -114,6 +114,27 @@ describe("resolveBoardColumn", () => {
     expect(resolveBoardColumn(makeThread({ interactionMode: "plan" }))).toBe("planning");
   });
 
+  it("moves a running plan-implementation turn to running despite the plan pin", () => {
+    const implementingTurn = {
+      ...(completedTurn as object),
+      state: "running",
+      completedAt: null,
+      sourceProposedPlan: { threadId: "thread-1", planId: "plan-1" },
+    } as SidebarThreadSummary["latestTurn"];
+    // The approve flow stamps sourceProposedPlan on the implementation turn;
+    // both the legacy mode pin and a stale actionable flag must yield to it.
+    expect(
+      resolveBoardColumn(
+        makeThread({
+          interactionMode: "plan",
+          hasActionableProposedPlan: true,
+          latestTurn: implementingTurn,
+          session: makeSession("running", "turn-1"),
+        }),
+      ),
+    ).toBe("running");
+  });
+
   it("routes plan-phase attention states to review", () => {
     expect(
       resolveBoardColumn(makeThread({ interactionMode: "plan", hasPendingApprovals: true })),

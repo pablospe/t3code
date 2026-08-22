@@ -85,8 +85,15 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
   // captured from the provider's own plan flow (Claude's ExitPlanMode)
   // regardless of T3's legacy thread mode. The interaction-mode check keeps
   // plan-phase threads (started via plan-mode turns) here too, including
-  // while the planning turn itself is running.
-  if (thread.hasActionableProposedPlan || thread.interactionMode === "plan") {
+  // while the planning turn itself is running. But an active turn that
+  // references the plan it implements is execution, not planning - the
+  // approve flow stamps sourceProposedPlan on the implementation turn, and
+  // that outranks the plan-mode pin so the card moves to Running.
+  const implementingPlan = active && thread.latestTurn?.sourceProposedPlan !== undefined;
+  if (
+    !implementingPlan &&
+    (thread.hasActionableProposedPlan || thread.interactionMode === "plan")
+  ) {
     return "planning";
   }
 
