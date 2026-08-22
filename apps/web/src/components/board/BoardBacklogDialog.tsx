@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 
 import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
-import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import {
@@ -15,6 +14,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 
 export interface BoardBacklogTaskDraft {
@@ -25,12 +25,18 @@ export interface BoardBacklogTaskDraft {
   presetId: string | null;
 }
 
-const WORKFLOW_BUTTON_CLASS = "cursor-pointer rounded px-2 py-1 text-xs";
+/** Select items cannot carry null, so the no-preset choice gets a sentinel.
+    "Default" here means no pinned preset: the task follows the board-wide
+    prompts (plain plan → implement unless customized in the pencil editor). */
+const DEFAULT_WORKFLOW_VALUE = "__default__";
 
-/** "Global prompts" is the absence of a per-task preset, not a preset itself. */
-const WORKFLOW_OPTIONS: ReadonlyArray<{ id: string | null; label: string }> = [
-  { id: null, label: "Global prompts" },
-  ...BOARD_PROMPT_PRESETS.map(({ id, label }) => ({ id, label })),
+const WORKFLOW_OPTIONS: ReadonlyArray<{ value: string; label: string; description: string }> = [
+  {
+    value: DEFAULT_WORKFLOW_VALUE,
+    label: "Default",
+    description: "Follows the board-wide prompts (editable via the pencil on the board).",
+  },
+  ...BOARD_PROMPT_PRESETS.map(({ id, label, description }) => ({ value: id, label, description })),
 ];
 
 /** Creates or edits a board task. Create makes a card that sits in Backlog:
@@ -110,24 +116,36 @@ export function BoardBacklogDialog({
               aria-label="Task details"
               className="text-sm"
             />
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-muted-foreground">Workflow:</span>
-              {WORKFLOW_OPTIONS.map((option) => (
-                <button
-                  key={option.id ?? "global"}
-                  type="button"
-                  onClick={() => setPresetId(option.id)}
-                  aria-pressed={presetId === option.id}
-                  className={cn(
-                    WORKFLOW_BUTTON_CLASS,
-                    presetId === option.id
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                  )}
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Workflow:</span>
+                <Select
+                  modal={false}
+                  value={presetId ?? DEFAULT_WORKFLOW_VALUE}
+                  onValueChange={(value: string | null) =>
+                    setPresetId(value === DEFAULT_WORKFLOW_VALUE ? null : value)
+                  }
+                  items={WORKFLOW_OPTIONS}
                 >
-                  {option.label}
-                </button>
-              ))}
+                  <SelectTrigger size="xs" aria-label="Workflow">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {WORKFLOW_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+              <p className="mt-1 text-[10px] text-muted-foreground/70">
+                {
+                  WORKFLOW_OPTIONS.find(
+                    (option) => option.value === (presetId ?? DEFAULT_WORKFLOW_VALUE),
+                  )?.description
+                }
+              </p>
             </div>
           </form>
         </DialogPanel>

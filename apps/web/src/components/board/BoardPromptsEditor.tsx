@@ -27,6 +27,7 @@ export function BoardPromptsEditor({ className }: { className?: string } = {}) {
   const setPrompt = useBoardPromptsStore((state) => state.setPrompt);
   const resetPrompt = useBoardPromptsStore((state) => state.resetPrompt);
   const applyPreset = useBoardPromptsStore((state) => state.applyPreset);
+  const applyDefaults = useBoardPromptsStore((state) => state.applyDefaults);
   return (
     <Dialog>
       <DialogTrigger
@@ -58,11 +59,20 @@ export function BoardPromptsEditor({ className }: { className?: string } = {}) {
         <DialogPanel className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs text-muted-foreground">Preset:</span>
+            <button
+              type="button"
+              onClick={applyDefaults}
+              title="Restore the built-in plan → implement prompts"
+              className="cursor-pointer rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              Default
+            </button>
             {BOARD_PROMPT_PRESETS.map((preset) => (
               <button
                 key={preset.id}
                 type="button"
                 onClick={() => applyPreset(preset.id)}
+                title={preset.description}
                 className="cursor-pointer rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 {preset.label}

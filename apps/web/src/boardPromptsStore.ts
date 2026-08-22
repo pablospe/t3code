@@ -54,16 +54,22 @@ export const DEFAULT_BOARD_PROMPTS: Record<BoardTransitionPromptKey, string> = {
 };
 
 /** Whole-workflow prompt sets, so switching a board to a spec-driven flow is
-    one click rather than four edits. */
+    one click rather than four edits. The plain plan/implement flow is not a
+    preset: it is what the board-wide prompts default to, and the picker's
+    "Default" option (no pinned preset, follows those prompts) covers it - a
+    pinned twin of it only ever confused. */
 export const BOARD_PROMPT_PRESETS: ReadonlyArray<{
   id: string;
   label: string;
+  /** Shown with the picker; names what the workflow expects installed. */
+  description: string;
   prompts: Record<BoardTransitionPromptKey, string>;
 }> = [
-  { id: "default", label: "Default", prompts: DEFAULT_BOARD_PROMPTS },
   {
     id: "openspec",
     label: "OpenSpec",
+    description:
+      "Spec-driven flow via /opsx slash commands. Assumes OpenSpec is installed for the agent in this project.",
     prompts: {
       backlogToPlanning: "/opsx:propose {task}",
       planningToRunning: "/opsx:apply",
@@ -88,6 +94,8 @@ interface BoardPromptsState {
   setPrompt: (key: BoardTransitionPromptKey, prompt: string) => void;
   resetPrompt: (key: BoardTransitionPromptKey) => void;
   applyPreset: (id: string) => void;
+  /** Restores all four prompts to the built-in defaults. */
+  applyDefaults: () => void;
 }
 
 export const useBoardPromptsStore = create<BoardPromptsState>()(
@@ -105,6 +113,7 @@ export const useBoardPromptsStore = create<BoardPromptsState>()(
         if (!preset) return;
         set({ prompts: { ...preset.prompts } });
       },
+      applyDefaults: () => set({ prompts: { ...DEFAULT_BOARD_PROMPTS } }),
     }),
     {
       name: "t3code:board-prompts:v1",
