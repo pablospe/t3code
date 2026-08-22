@@ -65,6 +65,7 @@ function BoardColumnSection({
   onSnooze,
   onUnsnooze,
   onContextMenu,
+  onEditTask,
   onNewThread,
   onArchiveAll,
   now,
@@ -84,6 +85,7 @@ function BoardColumnSection({
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
   onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
+  onEditTask: (thread: SidebarThreadSummary) => void;
   onNewThread: (() => void) | null;
   onArchiveAll: ((threads: ReadonlyArray<SidebarThreadSummary>) => void) | null;
   now: number;
@@ -171,6 +173,7 @@ function BoardColumnSection({
             onSnooze={onSnooze}
             onUnsnooze={onUnsnooze}
             onContextMenu={onContextMenu}
+            onEditTask={onEditTask}
             now={now}
           />
         ))}
@@ -219,6 +222,8 @@ export function BoardContent({
     reportFailure: false,
   });
   const [backlogDialogOpen, setBacklogDialogOpen] = useState(false);
+  /** Thread whose task fields the dialog is editing; null means create mode. */
+  const [editTask, setEditTask] = useState<SidebarThreadSummary | null>(null);
   const [activeDrag, setActiveDrag] = useState<{
     thread: SidebarThreadSummary;
     column: BoardColumnKey;
@@ -582,6 +587,28 @@ export function BoardContent({
     [createThread, updateThreadMetadata, newTaskProject, newTaskModelSelection],
   );
 
+  // Edit saves all three task fields in one meta update; empty details and
+  // "Global prompts" clear the stored values rather than being skipped, so
+  // the dialog can undo what it wrote. The title rides along only when it
+  // changed - a same-title update would be rename noise.
+  const saveTaskEdit = useCallback(
+    (draft: BoardBacklogTaskDraft) => {
+      if (!editTask) return;
+      const details = draft.details.trim();
+      void updateThreadMetadata({
+        environmentId: editTask.environmentId,
+        input: {
+          threadId: editTask.id,
+          ...(draft.title !== editTask.title ? { title: draft.title } : {}),
+          taskDetails: details.length > 0 ? details : null,
+          workflowPreset: draft.presetId,
+        },
+      });
+      setEditTask(null);
+    },
+    [editTask, updateThreadMetadata],
+  );
+
   if (!bootstrapped && threads.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -636,6 +663,7 @@ export function BoardContent({
                 onSnooze={snooze}
                 onUnsnooze={unsnooze}
                 onContextMenu={showCardContextMenu}
+                onEditTask={setEditTask}
                 onNewThread={column.definition.key === "backlog" ? openBacklogDialog : null}
                 onArchiveAll={column.definition.key === "done" ? archiveAll : null}
                 now={nowTick}
@@ -650,11 +678,27 @@ export function BoardContent({
         ) : null}
       </div>
       <BoardBacklogDialog
-        open={backlogDialogOpen}
-        onOpenChange={setBacklogDialogOpen}
+        open={backlogDialogOpen || editTask !== null}
+        onOpenChange={(next) => {
+          if (next) {
+            setBacklogDialogOpen(true);
+            return;
+          }
+          setBacklogDialogOpen(false);
+          setEditTask(null);
+        }}
         projectTitle={newTaskProject?.title ?? null}
         modelAvailable={newTaskProject !== null && newTaskModelSelection !== null}
-        onCreate={createBacklogTask}
+        initial={
+          editTask
+            ? {
+                title: editTask.title,
+                details: editTask.taskDetails ?? "",
+                presetId: editTask.workflowPreset ?? null,
+              }
+            : null
+        }
+        onSubmit={editTask ? saveTaskEdit : createBacklogTask}
       />
       {/* dropAnimation off: the source card never moved (the overlay is the
           dragged visual), so the default snap-back reads as a glitch. */}

@@ -46,11 +46,16 @@ function BoardCardBody({
   thread,
   projectTitle,
   snoozedWakeLabel = null,
+  onEditTask = null,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string;
   /** When set, the card is snoozed: the status pill yields to a wake label. */
   snoozedWakeLabel?: string | null;
+  /** Interactive cards pass this: the details icon becomes an edit button
+      (dimmed when the card has no details yet). The drag preview passes
+      nothing and keeps the passive icon. */
+  onEditTask?: (() => void) | null;
 }) {
   const pill = resolveThreadStatusPill({ thread });
   const activityAt = firstValidTimestamp(
@@ -71,7 +76,23 @@ function BoardCardBody({
       <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground/70">
         <span className="truncate">{projectTitle}</span>
         {thread.branch ? <span className="truncate">{thread.branch}</span> : null}
-        {detailsTooltip !== null ? (
+        {onEditTask !== null ? (
+          <button
+            type="button"
+            aria-label="Edit task details"
+            title={detailsTooltip ?? "Add task details"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditTask();
+            }}
+            className={cn(
+              "flex shrink-0 cursor-pointer items-center rounded p-0.5 hover:bg-accent hover:text-foreground",
+              detailsTooltip === null && "opacity-40",
+            )}
+          >
+            <FileTextIcon className="size-3" />
+          </button>
+        ) : detailsTooltip !== null ? (
           // The tooltip rides a span: a title attribute on an svg does not
           // surface natively.
           <span className="flex shrink-0 items-center" title={detailsTooltip}>
@@ -133,6 +154,7 @@ function BoardCardImpl({
   onSnooze,
   onUnsnooze,
   onContextMenu,
+  onEditTask,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string;
@@ -148,6 +170,7 @@ function BoardCardImpl({
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
   onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
+  onEditTask: (thread: SidebarThreadSummary) => void;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -226,6 +249,7 @@ function BoardCardImpl({
           thread={thread}
           projectTitle={projectTitle}
           snoozedWakeLabel={snoozedWakeLabel}
+          onEditTask={() => onEditTask(thread)}
         />
         <span
           className={cn(

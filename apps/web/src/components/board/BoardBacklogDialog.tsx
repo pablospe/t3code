@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
 import { cn } from "~/lib/utils";
@@ -33,53 +33,58 @@ const WORKFLOW_OPTIONS: ReadonlyArray<{ id: string | null; label: string }> = [
   ...BOARD_PROMPT_PRESETS.map(({ id, label }) => ({ id, label })),
 ];
 
-/** Creates a card that sits in Backlog: the thread exists server-side from
-    the moment it is named, but no turn starts until it is dragged out. Details
-    and workflow persist on the thread itself (taskDetails / workflowPreset), so
-    every client sees the same card. */
+/** Creates or edits a board task. Create makes a card that sits in Backlog:
+    the thread exists server-side from the moment it is named, but no turn
+    starts until it is dragged out. Edit (opened from a card's details icon)
+    reuses the same form seeded with the thread's current task fields. Details
+    and workflow persist on the thread itself (taskDetails / workflowPreset),
+    so every client sees the same card. */
 export function BoardBacklogDialog({
   open,
   onOpenChange,
   projectTitle,
   modelAvailable,
-  onCreate,
+  initial = null,
+  onSubmit,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectTitle: string | null;
   modelAvailable: boolean;
-  onCreate: (task: BoardBacklogTaskDraft) => void;
+  /** When set, the dialog edits this task instead of creating one. */
+  initial?: BoardBacklogTaskDraft | null;
+  onSubmit: (task: BoardBacklogTaskDraft) => void;
 }) {
+  const editing = initial !== null;
   const [title, setTitle] = useState("");
   const [details, setDetails] = useState("");
   const [presetId, setPresetId] = useState<string | null>(null);
+  // Seed on every open: blank for create (a dialog that reopens holding the
+  // last task reads as a stuck form), the thread's current fields for edit.
+  useEffect(() => {
+    if (!open) return;
+    setTitle(initial?.title ?? "");
+    setDetails(initial?.details ?? "");
+    setPresetId(initial?.presetId ?? null);
+  }, [open, initial]);
   const trimmed = title.trim();
-  const canCreate = trimmed.length > 0 && modelAvailable;
+  const canSubmit = trimmed.length > 0 && (editing || modelAvailable);
   const submit = () => {
-    if (!canCreate) return;
-    onCreate({ title: trimmed, details: details.trim(), presetId });
+    if (!canSubmit) return;
+    onSubmit({ title: trimmed, details: details.trim(), presetId });
     onOpenChange(false);
   };
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        // A dialog that reopens holding the last task reads as a stuck form.
-        if (next) {
-          setTitle("");
-          setDetails("");
-          setPresetId(null);
-        }
-        onOpenChange(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>New backlog task</DialogTitle>
+          <DialogTitle>{editing ? "Edit task" : "New backlog task"}</DialogTitle>
           <DialogDescription>
-            {modelAvailable
-              ? `Created in ${projectTitle ?? "the default project"} - it stays in Backlog until started; drag to Planning starts planning it.`
-              : "No model available - start any thread once first."}
+            {editing
+              ? "Changes save to the thread itself, so every client sees them."
+              : modelAvailable
+                ? `Created in ${projectTitle ?? "the default project"} - it stays in Backlog until started; drag to Planning starts planning it.`
+                : "No model available - start any thread once first."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -128,8 +133,8 @@ export function BoardBacklogDialog({
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button variant="outline" size="sm" />}>Cancel</DialogClose>
-          <Button size="sm" disabled={!canCreate} onClick={submit}>
-            Create
+          <Button size="sm" disabled={!canSubmit} onClick={submit}>
+            {editing ? "Save" : "Create"}
           </Button>
         </DialogFooter>
       </DialogPopup>
