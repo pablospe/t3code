@@ -1272,6 +1272,22 @@ function ChatViewContent(props: ChatViewProps) {
     [routeServerThreadShell, threadDetailLoading],
   );
   const activeServerThread = serverThread ?? loadingServerThread;
+  // A backlog thread carries its queued task details, so opening it seeds
+  // the composer and the queued prompt is one Send away. Only before the
+  // first turn, never over typed content, and once per visit so a composer
+  // the user cleared stays cleared.
+  const seededTaskDetailsThreadKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (routeKind !== "server" || !routeServerThreadShell) return;
+    if (seededTaskDetailsThreadKey.current === routeThreadKey) return;
+    const details = routeServerThreadShell.taskDetails?.trim();
+    if (!details || routeServerThreadShell.latestTurn !== null) return;
+    const store = useComposerDraftStore.getState();
+    const draft = store.getComposerDraft(routeThreadRef);
+    if (draft && draft.prompt.trim() !== "") return;
+    store.setPrompt(routeThreadRef, details);
+    seededTaskDetailsThreadKey.current = routeThreadKey;
+  }, [routeKind, routeServerThreadShell, routeThreadKey, routeThreadRef]);
   // Pagination window state for the routed server thread: drives the
   // "load earlier turns" header when the loaded window has older history.
   const routeThreadState = useEnvironmentThread(
