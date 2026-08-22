@@ -35,7 +35,7 @@ import type { SidebarThreadSummary } from "~/types";
 import { cn, newMessageId, newThreadId } from "~/lib/utils";
 
 import type { SnoozePreset } from "../Sidebar.snooze";
-import { TooltipProvider } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import {
   type BoardColumn,
   type BoardColumnKey,
@@ -109,9 +109,20 @@ function BoardColumnSection({
       )}
     >
       <header className="flex shrink-0 items-center justify-between px-3 py-2">
-        <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          {column.definition.title}
-        </h2>
+        {/* The empty-state hint disappears once the column fills, so the
+            header title keeps it reachable on hover. */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <h2 className="cursor-default text-xs font-semibold tracking-wide text-muted-foreground uppercase" />
+            }
+          >
+            {column.definition.title}
+          </TooltipTrigger>
+          <TooltipPopup side="bottom" align="start">
+            {column.definition.emptyHint}
+          </TooltipPopup>
+        </Tooltip>
         <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
           {onNewThread ? (
             <button
