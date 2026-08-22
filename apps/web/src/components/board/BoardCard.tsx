@@ -19,7 +19,9 @@ import type { SidebarThreadSummary } from "~/types";
 import { firstValidTimestamp, resolveThreadStatusPill } from "../Sidebar.logic";
 import { resolveSnoozePresets, snoozeWakeDescription, type SnoozePreset } from "../Sidebar.snooze";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { type BoardColumnKey, isThreadSnoozed } from "./boardColumns.logic";
+import { BoardCardTooltip } from "./BoardCardTooltip";
 
 export interface BoardCardDragData {
   readonly threadId: SidebarThreadSummary["id"];
@@ -174,174 +176,184 @@ function BoardCardImpl({
     data: dragData,
   });
 
+  // The card shares the sidebar row's hover card: the draggable card root is
+  // the tooltip trigger (base-ui merges the refs and pointer handlers), and
+  // BoardCardTooltip feeds the same popup the sidebar renders.
   return (
-    <div
-      ref={setNodeRef}
-      role="button"
-      tabIndex={0}
-      aria-current={selected ? "true" : undefined}
-      onClick={() => onOpen(thread)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" && event.target === event.currentTarget) onOpen(thread);
-      }}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onContextMenu(thread, { x: event.clientX, y: event.clientY });
-      }}
-      {...listeners}
-      className={cn(
-        CARD_FRAME_CLASS,
-        "group/board-card relative transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-        // The open thread's card reproduces the sidebar row's exact paint:
-        // its selected token is translucent, so matching the row means
-        // compositing it over the sidebar's own background, not the card's
-        // lighter surface - hence the two gradient layers. The quiet
-        // ring-color border keeps selection legible in themes where that
-        // composite matches the card (default light theme: both white).
-        // Everything else lights on hover only.
-        selected
-          ? "border-ring/40 [background-image:linear-gradient(var(--sidebar-row-selected),var(--sidebar-row-selected)),linear-gradient(var(--sidebar),var(--sidebar))]"
-          : "hover:bg-accent/60",
-        // Offscreen cards skip style, layout and paint; a tall column costs
-        // what the viewport shows. The intrinsic size keeps scrolling honest.
-        "[contain-intrinsic-block-size:72px] [content-visibility:auto]",
-        // Snoozed cards recede like disabled controls but stay interactive;
-        // hover restores enough contrast to read and act on them.
-        snoozed && "opacity-50 hover:opacity-90",
-        isDragging && "opacity-40",
-      )}
-    >
-      <BoardCardBody
-        thread={thread}
-        projectTitle={projectTitle}
-        snoozedWakeLabel={snoozedWakeLabel}
-      />
-      <span
-        className={cn(
-          "absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-card/90 opacity-0 transition-opacity",
-          "group-hover/board-card:opacity-100 has-[:focus-visible]:opacity-100",
-          snoozeOpen && "opacity-100",
-        )}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div
+            ref={setNodeRef}
+            role="button"
+            tabIndex={0}
+            aria-current={selected ? "true" : undefined}
+            onClick={() => onOpen(thread)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && event.target === event.currentTarget) onOpen(thread);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onContextMenu(thread, { x: event.clientX, y: event.clientY });
+            }}
+            {...listeners}
+            className={cn(
+              CARD_FRAME_CLASS,
+              "group/board-card relative transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+              // The open thread's card reproduces the sidebar row's exact paint:
+              // its selected token is translucent, so matching the row means
+              // compositing it over the sidebar's own background, not the card's
+              // lighter surface - hence the two gradient layers. The quiet
+              // ring-color border keeps selection legible in themes where that
+              // composite matches the card (default light theme: both white).
+              // Everything else lights on hover only.
+              selected
+                ? "border-ring/40 [background-image:linear-gradient(var(--sidebar-row-selected),var(--sidebar-row-selected)),linear-gradient(var(--sidebar),var(--sidebar))]"
+                : "hover:bg-accent/60",
+              // Offscreen cards skip style, layout and paint; a tall column costs
+              // what the viewport shows. The intrinsic size keeps scrolling honest.
+              "[contain-intrinsic-block-size:72px] [content-visibility:auto]",
+              // Snoozed cards recede like disabled controls but stay interactive;
+              // hover restores enough contrast to read and act on them.
+              snoozed && "opacity-50 hover:opacity-90",
+              isDragging && "opacity-40",
+            )}
+          />
+        }
       >
-        {column === "done" ? (
-          <>
-            <button
-              type="button"
-              aria-label="Unsettle thread"
-              title="Unsettle"
-              onClick={(event) => {
-                event.stopPropagation();
-                onUnsettle(thread);
-              }}
-              className={ACTION_BUTTON_CLASS}
-            >
-              <Undo2Icon className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              aria-label="Archive thread"
-              title="Archive"
-              onClick={(event) => {
-                event.stopPropagation();
-                onArchive(thread);
-              }}
-              className={ACTION_BUTTON_CLASS}
-            >
-              <ArchiveIcon className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              aria-label="Delete thread"
-              title="Delete"
-              onClick={(event) => {
-                event.stopPropagation();
-                onDelete(thread);
-              }}
-              className={cn(ACTION_BUTTON_CLASS, "hover:text-error")}
-            >
-              <Trash2Icon className="size-3.5" />
-            </button>
-          </>
-        ) : snoozed ? (
-          <>
-            <button
-              type="button"
-              aria-label="Unsnooze thread"
-              title="Unsnooze"
-              onClick={(event) => {
-                event.stopPropagation();
-                onUnsnooze(thread);
-              }}
-              className={ACTION_BUTTON_CLASS}
-            >
-              <AlarmClockOffIcon className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              aria-label="Settle thread"
-              title="Settle"
-              onClick={(event) => {
-                event.stopPropagation();
-                onSettle(thread);
-              }}
-              className={ACTION_BUTTON_CLASS}
-            >
-              <CheckIcon className="size-3.5" />
-            </button>
-          </>
-        ) : (
-          <>
-            <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>
-              <PopoverTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label="Snooze thread"
-                    title="Snooze"
-                    onClick={(event) => event.stopPropagation()}
-                    className={ACTION_BUTTON_CLASS}
-                  />
-                }
+        <BoardCardBody
+          thread={thread}
+          projectTitle={projectTitle}
+          snoozedWakeLabel={snoozedWakeLabel}
+        />
+        <span
+          className={cn(
+            "absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-card/90 opacity-0 transition-opacity",
+            "group-hover/board-card:opacity-100 has-[:focus-visible]:opacity-100",
+            snoozeOpen && "opacity-100",
+          )}
+        >
+          {column === "done" ? (
+            <>
+              <button
+                type="button"
+                aria-label="Unsettle thread"
+                title="Unsettle"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onUnsettle(thread);
+                }}
+                className={ACTION_BUTTON_CLASS}
               >
-                <ClockIcon className="size-3.5" />
-              </PopoverTrigger>
-              <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
-                {snoozePresets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setSnoozeOpen(false);
-                      onSnooze(thread, preset);
-                    }}
-                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
-                  >
-                    <span className="flex-1">{preset.label}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground/60 tabular-nums">
-                      {preset.whenLabel}
-                    </span>
-                  </button>
-                ))}
-              </PopoverPopup>
-            </Popover>
-            <button
-              type="button"
-              aria-label="Settle thread"
-              title="Settle"
-              onClick={(event) => {
-                event.stopPropagation();
-                onSettle(thread);
-              }}
-              className={ACTION_BUTTON_CLASS}
-            >
-              <CheckIcon className="size-3.5" />
-            </button>
-          </>
-        )}
-      </span>
-    </div>
+                <Undo2Icon className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Archive thread"
+                title="Archive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onArchive(thread);
+                }}
+                className={ACTION_BUTTON_CLASS}
+              >
+                <ArchiveIcon className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Delete thread"
+                title="Delete"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDelete(thread);
+                }}
+                className={cn(ACTION_BUTTON_CLASS, "hover:text-error")}
+              >
+                <Trash2Icon className="size-3.5" />
+              </button>
+            </>
+          ) : snoozed ? (
+            <>
+              <button
+                type="button"
+                aria-label="Unsnooze thread"
+                title="Unsnooze"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onUnsnooze(thread);
+                }}
+                className={ACTION_BUTTON_CLASS}
+              >
+                <AlarmClockOffIcon className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Settle thread"
+                title="Settle"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSettle(thread);
+                }}
+                className={ACTION_BUTTON_CLASS}
+              >
+                <CheckIcon className="size-3.5" />
+              </button>
+            </>
+          ) : (
+            <>
+              <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Snooze thread"
+                      title="Snooze"
+                      onClick={(event) => event.stopPropagation()}
+                      className={ACTION_BUTTON_CLASS}
+                    />
+                  }
+                >
+                  <ClockIcon className="size-3.5" />
+                </PopoverTrigger>
+                <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
+                  {snoozePresets.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSnoozeOpen(false);
+                        onSnooze(thread, preset);
+                      }}
+                      className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
+                    >
+                      <span className="flex-1">{preset.label}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground/60 tabular-nums">
+                        {preset.whenLabel}
+                      </span>
+                    </button>
+                  ))}
+                </PopoverPopup>
+              </Popover>
+              <button
+                type="button"
+                aria-label="Settle thread"
+                title="Settle"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSettle(thread);
+                }}
+                className={ACTION_BUTTON_CLASS}
+              >
+                <CheckIcon className="size-3.5" />
+              </button>
+            </>
+          )}
+        </span>
+      </TooltipTrigger>
+      <BoardCardTooltip thread={thread} projectTitle={projectTitle} />
+    </Tooltip>
   );
 }
 

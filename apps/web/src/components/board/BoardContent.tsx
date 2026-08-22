@@ -35,6 +35,7 @@ import type { SidebarThreadSummary } from "~/types";
 import { cn, newMessageId, newThreadId } from "~/lib/utils";
 
 import type { SnoozePreset } from "../Sidebar.snooze";
+import { TooltipProvider } from "../ui/tooltip";
 import {
   type BoardColumn,
   type BoardColumnKey,
@@ -599,33 +600,37 @@ export function BoardContent({
               : "flex h-full min-h-0 gap-3 overflow-x-auto p-4"
           }
         >
-          {columns.map((column) => (
-            <BoardColumnSection
-              key={column.definition.key}
-              column={column}
-              dragFrom={activeDrag?.column ?? null}
-              dragReturn={
-                activeDrag?.column === "done" ? resolveDoneReturnColumn(activeDrag.thread) : null
-              }
-              selectedThreadKey={
-                selectedThreadRef
-                  ? boardKey(selectedThreadRef.environmentId, selectedThreadRef.threadId)
-                  : null
-              }
-              projectTitles={projectTitles}
-              onOpen={openThread}
-              onSettle={settle}
-              onUnsettle={unsettle}
-              onArchive={archive}
-              onDelete={deleteWithConfirm}
-              onSnooze={snooze}
-              onUnsnooze={unsnooze}
-              onContextMenu={showCardContextMenu}
-              onNewThread={column.definition.key === "backlog" ? openBacklogDialog : null}
-              onArchiveAll={column.definition.key === "done" ? archiveAll : null}
-              now={nowTick}
-            />
-          ))}
+          {/* Same hover-card pacing as the sidebar list: quick in, instant
+              out, with a grace window when gliding between cards. */}
+          <TooltipProvider key="board-card-tooltips-150" delay={150} closeDelay={0} timeout={400}>
+            {columns.map((column) => (
+              <BoardColumnSection
+                key={column.definition.key}
+                column={column}
+                dragFrom={activeDrag?.column ?? null}
+                dragReturn={
+                  activeDrag?.column === "done" ? resolveDoneReturnColumn(activeDrag.thread) : null
+                }
+                selectedThreadKey={
+                  selectedThreadRef
+                    ? boardKey(selectedThreadRef.environmentId, selectedThreadRef.threadId)
+                    : null
+                }
+                projectTitles={projectTitles}
+                onOpen={openThread}
+                onSettle={settle}
+                onUnsettle={unsettle}
+                onArchive={archive}
+                onDelete={deleteWithConfirm}
+                onSnooze={snooze}
+                onUnsnooze={unsnooze}
+                onContextMenu={showCardContextMenu}
+                onNewThread={column.definition.key === "backlog" ? openBacklogDialog : null}
+                onArchiveAll={column.definition.key === "done" ? archiveAll : null}
+                now={nowTick}
+              />
+            ))}
+          </TooltipProvider>
         </div>
         {/* The drawer host has no header, so the prompts editor rides the
             board itself. */}

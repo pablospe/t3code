@@ -251,7 +251,7 @@ function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
 }
 
-function SidebarThreadTooltip({
+export function SidebarThreadTooltip({
   thread,
   projectTitle,
   projectCwd,
