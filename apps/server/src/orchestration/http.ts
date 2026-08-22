@@ -18,6 +18,7 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { TurnStartBootstrap } from "./TurnStartBootstrap.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -25,6 +26,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const turnStartBootstrap = yield* TurnStartBootstrap;
 
     return handlers
       .handle(
@@ -96,13 +98,19 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
+          // Same bootstrap handling as the WebSocket dispatch path: a
+          // turn.start carrying `bootstrap` creates the thread (and worktree)
+          // before the turn itself runs.
+          const toDispatchFailure = (cause: unknown) =>
+            failEnvironmentInternal("orchestration_dispatch_failed", cause);
+          if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
+            return yield* turnStartBootstrap
+              .dispatchTurnStart(normalizedCommand)
+              .pipe(Effect.catch(toDispatchFailure));
+          }
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              ),
-            );
+            .pipe(Effect.catch(toDispatchFailure));
         }),
       );
   }),
