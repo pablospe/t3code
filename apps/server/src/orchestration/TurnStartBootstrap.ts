@@ -48,6 +48,7 @@ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchComma
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
+/** Preserve the setup runner's broader pre-refactor message normalization. */
 function setupFailureDescription(cause: unknown): string {
   if (
     typeof cause === "object" &&
