@@ -349,7 +349,7 @@ export function BoardContent({
   const { openMenu } = useThreadActionMenu({
     threadRef: menuThreadRef,
     projectCwd: menuProjectCwd,
-    changeRequestState: null,
+    changeRequest: null,
     // The board has no inline rename; the thread header does, so go there.
     onStartRename: () => {
       if (menuTarget) openThread(menuTarget.thread);
