@@ -60,6 +60,10 @@ function setupFailureDescription(cause: unknown): string {
   return String(cause);
 }
 
+function unexpectedCompatibilityError(error: never): never {
+  throw new Error(`Unhandled compatibility error: ${String(error)}`);
+}
+
 function projectSetupScriptCompatibilityDetail(
   error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError,
 ): string {
@@ -69,7 +73,7 @@ function projectSetupScriptCompatibilityDetail(
     case "ProjectSetupScriptProjectNotFoundError":
       return "Project was not found for setup script execution.";
     default:
-      return `Unexpected error: ${String(error)}`;
+      return unexpectedCompatibilityError(error);
   }
 }
 
