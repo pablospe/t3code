@@ -135,6 +135,25 @@ describe("resolveBoardColumn", () => {
     ).toBe("running");
   });
 
+  it("lands a finished plan implementation in review, not back in planning", () => {
+    // Once the server stamps implementedAt on the approved plan the actionable
+    // flag drops, so the completed implementation turn must fall through to
+    // review instead of bouncing the card back to planning.
+    const implementedTurn = {
+      ...(completedTurn as object),
+      sourceProposedPlan: { threadId: "thread-1", planId: "plan-1" },
+    } as SidebarThreadSummary["latestTurn"];
+    expect(
+      resolveBoardColumn(
+        makeThread({
+          hasActionableProposedPlan: false,
+          latestTurn: implementedTurn,
+          session: makeSession("ready"),
+        }),
+      ),
+    ).toBe("review");
+  });
+
   it("routes plan-phase attention states to review", () => {
     expect(
       resolveBoardColumn(makeThread({ interactionMode: "plan", hasPendingApprovals: true })),

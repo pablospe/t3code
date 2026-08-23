@@ -176,10 +176,13 @@ function derivePendingUserInputCountFromActivities(
   return openRequestIds.size;
 }
 
-function deriveHasActionableProposedPlan(input: {
+/** The plan the thread is still waiting on, or null when nothing is
+    actionable. Shells carry both its existence and its id, so a client can
+    start the implementation turn against it without loading the detail. */
+function deriveActionableProposedPlan(input: {
   readonly latestTurnId: string | null;
   readonly proposedPlans: ReadonlyArray<ProjectionThreadProposedPlan>;
-}): boolean {
+}): ProjectionThreadProposedPlan | null {
   const sorted = [...input.proposedPlans].toSorted(
     (left, right) =>
       left.updatedAt.localeCompare(right.updatedAt) || left.planId.localeCompare(right.planId),
@@ -196,11 +199,11 @@ function deriveHasActionableProposedPlan(input: {
     }
   }
   if (latestForTurn !== null) {
-    return latestForTurn.implementedAt === null;
+    return latestForTurn.implementedAt === null ? latestForTurn : null;
   }
 
   const latestPlan = sorted.at(-1) ?? null;
-  return latestPlan !== null && latestPlan.implementedAt === null;
+  return latestPlan !== null && latestPlan.implementedAt === null ? latestPlan : null;
 }
 
 function retainProjectionMessagesAfterRevert(
@@ -583,7 +586,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         (approval) => approval.status === "pending",
       ).length;
       const pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
-      const hasActionableProposedPlan = deriveHasActionableProposedPlan({
+      const actionableProposedPlan = deriveActionableProposedPlan({
         latestTurnId: existingRow.value.latestTurnId,
         proposedPlans,
       });
@@ -593,7 +596,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         latestUserMessageAt,
         pendingApprovalCount,
         pendingUserInputCount,
-        hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
+        hasActionableProposedPlan: actionableProposedPlan !== null ? 1 : 0,
+        actionableProposedPlanId: actionableProposedPlan?.planId ?? null,
       });
     });
 
@@ -629,6 +633,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
+            actionableProposedPlanId: null,
             deletedAt: null,
           });
           return;

@@ -1807,6 +1807,139 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       }),
   );
 
+  it.effect("carries the actionable proposed plan id on the projected shell summary", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const readShellSummary = () =>
+        sql<{
+          readonly hasActionableProposedPlan: number;
+          readonly actionableProposedPlanId: string | null;
+        }>`
+          SELECT
+            has_actionable_proposed_plan AS "hasActionableProposedPlan",
+            actionable_proposed_plan_id AS "actionableProposedPlanId"
+          FROM projection_threads
+          WHERE thread_id = 'thread-actionable-plan'
+        `;
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-actionable-plan-1"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-actionable-plan"),
+        occurredAt: "2026-02-26T13:00:00.000Z",
+        commandId: CommandId.make("cmd-actionable-plan-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-actionable-plan-1"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-actionable-plan"),
+          title: "Project Actionable Plan",
+          workspaceRoot: "/tmp/project-actionable-plan",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-26T13:00:00.000Z",
+          updatedAt: "2026-02-26T13:00:00.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-actionable-plan-2"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-actionable-plan"),
+        occurredAt: "2026-02-26T13:00:01.000Z",
+        commandId: CommandId.make("cmd-actionable-plan-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-actionable-plan-2"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-actionable-plan"),
+          projectId: ProjectId.make("project-actionable-plan"),
+          title: "Thread Actionable Plan",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-26T13:00:01.000Z",
+          updatedAt: "2026-02-26T13:00:01.000Z",
+        },
+      });
+
+      assert.deepEqual(yield* readShellSummary(), [
+        { hasActionableProposedPlan: 0, actionableProposedPlanId: null },
+      ]);
+
+      yield* appendAndProject({
+        type: "thread.proposed-plan-upserted",
+        eventId: EventId.make("evt-actionable-plan-3"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-actionable-plan"),
+        occurredAt: "2026-02-26T13:00:02.000Z",
+        commandId: CommandId.make("cmd-actionable-plan-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-actionable-plan-3"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-actionable-plan"),
+          proposedPlan: {
+            id: "plan-actionable-1",
+            turnId: null,
+            planMarkdown: "# Plan",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-02-26T13:00:02.000Z",
+            updatedAt: "2026-02-26T13:00:02.000Z",
+          },
+        },
+      });
+
+      assert.deepEqual(yield* readShellSummary(), [
+        { hasActionableProposedPlan: 1, actionableProposedPlanId: "plan-actionable-1" },
+      ]);
+
+      // Approving the plan stamps implementedAt; the shell must drop both the
+      // flag and the id so the board stops offering it as actionable.
+      yield* appendAndProject({
+        type: "thread.proposed-plan-upserted",
+        eventId: EventId.make("evt-actionable-plan-4"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-actionable-plan"),
+        occurredAt: "2026-02-26T13:00:03.000Z",
+        commandId: CommandId.make("cmd-actionable-plan-4"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-actionable-plan-4"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-actionable-plan"),
+          proposedPlan: {
+            id: "plan-actionable-1",
+            turnId: null,
+            planMarkdown: "# Plan",
+            implementedAt: "2026-02-26T13:00:03.000Z",
+            implementationThreadId: ThreadId.make("thread-actionable-plan"),
+            createdAt: "2026-02-26T13:00:02.000Z",
+            updatedAt: "2026-02-26T13:00:03.000Z",
+          },
+        },
+      });
+
+      assert.deepEqual(yield* readShellSummary(), [
+        { hasActionableProposedPlan: 0, actionableProposedPlanId: null },
+      ]);
+    }),
+  );
+
   it.effect("clears stale pending approvals from projected shell summaries", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

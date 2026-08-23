@@ -78,9 +78,20 @@ function BoardCardBody({
       <span className="block truncate pr-12 text-sm font-medium text-foreground">
         {thread.title}
       </span>
-      <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground/70">
+      <span
+        className={cn(
+          "mt-0.5 flex items-center gap-2 text-xs text-muted-foreground/70",
+          // The selected card's lighter fill washes out the default grey;
+          // restore contrast on the card you are actually looking at.
+          "group-aria-[current=true]/board-card:text-muted-foreground",
+        )}
+      >
+        {/* The branch shrinks four times faster than the project: the project
+            name disambiguates environments, so it wins the width fight. */}
         <span className="truncate">{projectTitle}</span>
-        {thread.branch ? <span className="truncate">{thread.branch}</span> : null}
+        {thread.branch ? (
+          <span className="min-w-0 shrink-[4] truncate">{thread.branch}</span>
+        ) : null}
         {onEditTask !== null ? (
           <button
             type="button"

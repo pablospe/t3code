@@ -451,6 +451,14 @@ export function BoardContent({
           },
         });
       }
+      // An execution drop off Planning is the approve gesture: stamp the plan
+      // it implements exactly like the composer's plan follow-up, so the
+      // server marks the plan implemented and the card stops reading as
+      // Planning once the turn starts.
+      const sourceProposedPlan =
+        interactionMode === "default" && thread.actionableProposedPlanId != null
+          ? { threadId: thread.id, planId: thread.actionableProposedPlanId }
+          : null;
       void startTurn({
         environmentId: thread.environmentId,
         input: {
@@ -463,6 +471,7 @@ export function BoardContent({
           },
           runtimeMode: thread.runtimeMode ?? "auto",
           interactionMode,
+          ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         },
       });
     },

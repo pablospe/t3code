@@ -486,6 +486,13 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
   /**
+   * Id of the plan hasActionableProposedPlan points at, so a client can start
+   * the implementation turn against it without loading the thread detail.
+   * Null whenever hasActionableProposedPlan is false. Optional so payloads
+   * from older servers still decode.
+   */
+  actionableProposedPlanId: Schema.optional(Schema.NullOr(OrchestrationProposedPlanId)),
+  /**
    * Native background work alive after the turn settles: "working" while
    * subagents/workflows run, "monitoring" when watch loops are the only
    * live work. Optional so old servers/clients interop; absent = none.

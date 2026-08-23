@@ -466,6 +466,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           hasPendingApprovals: true,
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
+          actionableProposedPlanId: null,
           backgroundLiveness: null,
           planProgress: null,
         },
