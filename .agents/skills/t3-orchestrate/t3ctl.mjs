@@ -122,7 +122,7 @@ function loadToken() {
 
 let token = loadToken();
 
-async function api(method, path, body) {
+async function api(method, path, body, { allowFailure = false } = {}) {
   const doFetch = () =>
     fetch(`${origin}${path}`, {
       method,
@@ -139,13 +139,19 @@ async function api(method, path, body) {
   }
   if (!response.ok) {
     const text = await response.text();
+    if (allowFailure) return { ok: false, status: response.status, detail: text.slice(0, 500) };
     fail(`${method} ${path} -> ${response.status}: ${text.slice(0, 500)}`);
   }
-  return response.json();
+  const json = await response.json();
+  return allowFailure ? { ok: true, ...json } : json;
 }
 
 const shellSnapshot = () => api("GET", "/api/orchestration/shell");
 const dispatch = (command) => api("POST", "/api/orchestration/dispatch", command);
+/** Like dispatch, but a rejection returns { ok: false } instead of exiting -
+    used to probe server capabilities (bootstrap parity) with a fallback. */
+const tryDispatch = (command) =>
+  api("POST", "/api/orchestration/dispatch", command, { allowFailure: true });
 
 // ---------- backlog queue (t3ctl-owned sidecar) ----------
 // T3 threads have no "message without a turn", so queued task prompts live
@@ -165,14 +171,18 @@ function writeBacklogQueue(queue) {
   writeFileSync(backlogQueuePath, JSON.stringify(queue, null, 2), { mode: 0o600 });
 }
 
-function createTaskWorktree(cwd, title, branchFlag, baseBranch) {
+function taskBranchName(title, branchFlag) {
   const slug =
     title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/(^-|-$)/g, "")
       .slice(0, 32) || "task";
-  const branch = branchFlag ?? `orc/${slug}-${randomUUID().slice(0, 4)}`;
+  return branchFlag ?? `orc/${slug}-${randomUUID().slice(0, 4)}`;
+}
+
+function createTaskWorktree(cwd, title, branchFlag, baseBranch) {
+  const branch = taskBranchName(title, branchFlag);
   // Mirrors T3's own layout: <baseDir>/worktrees/<repoName>/<branch with / -> ->
   const repoName = cwd.split("/").filter(Boolean).pop();
   const worktreePath = join(baseDir, "worktrees", repoName, branch.replaceAll("/", "-"));
@@ -330,21 +340,82 @@ async function main() {
           );
       }
 
-      // The websocket client does thread bootstrap server-side; over plain
-      // HTTP the engine requires the thread to exist first, so t3ctl performs
-      // the same sequence itself: worktree, thread.create, first turn.
+      const now = new Date().toISOString();
+      const threadId = randomUUID();
+
+      // Preferred path: one turn.start carrying bootstrap. The server creates
+      // the thread, prepares the worktree (based on origin/<base> when the
+      // remote exists), runs the project setup script, and rolls everything
+      // back on failure. Servers predating HTTP bootstrap parity reject this;
+      // the client-side sequence below remains as the fallback.
+      const bootstrapResult = await tryDispatch({
+        type: "thread.turn.start",
+        commandId: randomUUID(),
+        threadId,
+        message: { messageId: randomUUID(), role: "user", text: prompt, attachments: [] },
+        runtimeMode: mode,
+        interactionMode,
+        createdAt: now,
+        bootstrap: {
+          createThread: {
+            projectId: project.id,
+            title,
+            modelSelection,
+            runtimeMode: mode,
+            interactionMode,
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+          },
+          ...(noWorktree
+            ? {}
+            : {
+                prepareWorktree: {
+                  projectCwd: cwd,
+                  baseBranch,
+                  // Always named: without newRefName the server checks out the
+                  // base branch itself, which git refuses while the primary
+                  // checkout holds it.
+                  branch: taskBranchName(title, branchFlag),
+                  startFromOrigin: true,
+                },
+                runSetupScript: true,
+              }),
+        },
+      });
+      if (bootstrapResult.ok) {
+        // Branch and worktree path were chosen server-side; read them back.
+        const snapshotAfter = await shellSnapshot();
+        const created = snapshotAfter.threads.find((candidate) => candidate.id === threadId);
+        output({
+          threadId,
+          title,
+          project: project.title,
+          mode,
+          bootstrap: true,
+          branch: created?.branch ?? null,
+          worktreePath: created?.worktreePath ?? null,
+          sequence: bootstrapResult.sequence,
+        });
+        return;
+      }
+      console.error(
+        `t3ctl: server rejected bootstrap turn start (${bootstrapResult.status}); using client-side spawn`,
+      );
+
       let branch = null;
       let worktreePath = null;
       if (!noWorktree) {
         ({ branch, worktreePath } = createTaskWorktree(cwd, title, branchFlag, baseBranch));
       }
 
-      const now = new Date().toISOString();
-      const threadId = randomUUID();
+      // A failed bootstrap may have created and rolled back the thread; the
+      // tombstone blocks re-creating the same id, so the fallback mints anew.
+      const fallbackThreadId = randomUUID();
       await dispatch({
         type: "thread.create",
         commandId: randomUUID(),
-        threadId,
+        threadId: fallbackThreadId,
         projectId: project.id,
         title,
         modelSelection,
@@ -357,17 +428,18 @@ async function main() {
       const result = await dispatch({
         type: "thread.turn.start",
         commandId: randomUUID(),
-        threadId,
+        threadId: fallbackThreadId,
         message: { messageId: randomUUID(), role: "user", text: prompt, attachments: [] },
         runtimeMode: mode,
         interactionMode,
         createdAt: new Date().toISOString(),
       });
       output({
-        threadId,
+        threadId: fallbackThreadId,
         title,
         project: project.title,
         mode,
+        bootstrap: false,
         branch,
         worktreePath,
         sequence: result.sequence,
@@ -525,6 +597,47 @@ async function main() {
       return;
     }
 
+    case "approve": {
+      // Approve a child's proposed plan the way the web client does: flip the
+      // thread out of plan mode, then start a default-mode turn that carries
+      // the plan verbatim plus its sourceProposedPlan reference (which marks
+      // the plan implemented server-side, so board/status derivations move
+      // on). To request a re-plan with feedback instead, use `prompt` - a
+      // plan-mode thread re-plans with the feedback, matching the web.
+      const threadId = args.shift() ?? fail("usage: approve <threadId>");
+      const detail = await api("GET", `/api/orchestration/threads/${threadId}`);
+      const thread = detail.thread ?? detail;
+      const plans = (thread.proposedPlans ?? []).filter((plan) => !plan.implementedAt);
+      const plan = plans[plans.length - 1];
+      if (!plan) fail(`thread ${threadId} has no unimplemented proposed plan`);
+      if (thread.interactionMode === "plan") {
+        await dispatch({
+          type: "thread.interaction-mode.set",
+          commandId: randomUUID(),
+          threadId,
+          interactionMode: "default",
+          createdAt: new Date().toISOString(),
+        });
+      }
+      const result = await dispatch({
+        type: "thread.turn.start",
+        commandId: randomUUID(),
+        threadId,
+        message: {
+          messageId: randomUUID(),
+          role: "user",
+          text: `PLEASE IMPLEMENT THIS PLAN:\n${plan.planMarkdown.trim()}`,
+          attachments: [],
+        },
+        runtimeMode: thread.runtimeMode ?? "auto",
+        interactionMode: "default",
+        sourceProposedPlan: { threadId, planId: plan.id },
+        createdAt: new Date().toISOString(),
+      });
+      output({ threadId, planId: plan.id, sequence: result.sequence });
+      return;
+    }
+
     case "status": {
       const threadId = args.shift() ?? fail("usage: status <threadId>");
       const snapshot = await shellSnapshot();
@@ -608,7 +721,10 @@ Commands:
         queue a task: thread created but not started; the prompt is stored
         and delivered by \`start\`
   start <threadId> [override message]        start a queued backlog item
-  prompt <threadId> <message>                send a follow-up turn
+  prompt <threadId> <message>                send a follow-up turn (a plan-mode
+                                             thread re-plans with the feedback)
+  approve <threadId>                         approve the proposed plan: starts
+                                             the implementation turn
   status <threadId>                          one-line thread status
   result <threadId>                          last assistant message
   wait <threadId> [--timeout s] [--interval s]  block until turn settles
