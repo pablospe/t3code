@@ -104,9 +104,17 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const toDispatchFailure = (cause: unknown) =>
             failEnvironmentInternal("orchestration_dispatch_failed", cause);
           if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
-            return yield* turnStartBootstrap
-              .dispatchTurnStart(normalizedCommand)
-              .pipe(Effect.catch(toDispatchFailure));
+            return yield* turnStartBootstrap.dispatchTurnStart(normalizedCommand).pipe(
+              // The WebSocket path hands clients the error's
+              // bootstrapThreadDisposition; over HTTP that signal survives as
+              // its own reason, so a caller knows the thread is gone and a
+              // retry needs a fresh id.
+              Effect.catch((cause) =>
+                cause.bootstrapThreadDisposition === "deleted"
+                  ? failEnvironmentInternal("orchestration_bootstrap_rolled_back", cause)
+                  : toDispatchFailure(cause),
+              ),
+            );
           }
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)

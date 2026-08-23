@@ -122,8 +122,10 @@ export const make = Effect.gen(function* () {
     options?: TurnStartBootstrapDispatchOptions,
   ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
     Effect.gen(function* () {
-      // Every sub-command the bootstrap emits carries the caller's origin: the
-      // client's request caused them.
+      // Every sub-command the bootstrap emits carries whatever origin the
+      // transport supplied: the WebSocket path passes its client origin so the
+      // sub-commands attribute to the request that caused them; HTTP dispatch
+      // passes none, as its plain dispatch path never has.
       const dispatch = (subCommand: OrchestrationCommand) =>
         orchestrationEngine.dispatch(subCommand, options);
 
