@@ -1,0 +1,14 @@
+- generic [ref=e4]:
+    - paragraph [ref=e5]: T3 Code (Dev)
+    - heading "Pair with this environment" [level=1] [ref=e6]
+    - paragraph [ref=e7]: Enter a pairing token to start a session with this environment.
+    - generic [ref=e8]:
+        - generic [ref=e9]:
+            - text: Pairing token
+            - textbox "Pairing token" [disabled] [ref=e11]:
+                - /placeholder: Paste a one-time token or pairing secret
+                - text: PJKBVXRVA9ZH
+        - generic [ref=e12]:
+            - button "Pairing..." [disabled]
+            - button "Reload app" [disabled]
+    - generic [ref=e13]: This environment accepts one-time pairing tokens. Pairing links can open this page directly, or you can paste the token here.
