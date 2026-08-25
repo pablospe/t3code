@@ -98,22 +98,33 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          // Same bootstrap handling as the WebSocket dispatch path: a
-          // turn.start carrying `bootstrap` creates the thread (and worktree)
-          // before the turn itself runs. Both paths drop attachments they
-          // uploaded when the dispatch fails.
-          const cleanupAttachments = () =>
+          // A failed dispatch must not strand attachments the request uploaded,
+          // whichever path it took. Inlined per pipe: hoisting the tapError
+          // into a shared pipeable erases the typed error channel.
+          const cleanupUploads = () =>
             cleanupFailedUploadedAttachments(args.payload, normalizedCommand);
           const toDispatchFailure = (cause: unknown) =>
             failEnvironmentInternal("orchestration_dispatch_failed", cause);
+          // Same bootstrap handling as the WebSocket dispatch path: a
+          // turn.start carrying `bootstrap` creates the thread (and worktree)
+          // before the turn itself runs.
           if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
-            return yield* turnStartBootstrap
-              .dispatchTurnStart(normalizedCommand)
-              .pipe(Effect.tapError(cleanupAttachments), Effect.catch(toDispatchFailure));
+            return yield* turnStartBootstrap.dispatchTurnStart(normalizedCommand).pipe(
+              Effect.tapError(cleanupUploads),
+              // The WebSocket path hands clients the error's
+              // bootstrapThreadDisposition; over HTTP that signal survives as
+              // its own reason, so a caller knows the thread is gone and a
+              // retry needs a fresh id.
+              Effect.catch((cause) =>
+                cause.bootstrapThreadDisposition === "deleted"
+                  ? failEnvironmentInternal("orchestration_bootstrap_rolled_back", cause)
+                  : toDispatchFailure(cause),
+              ),
+            );
           }
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)
-            .pipe(Effect.tapError(cleanupAttachments), Effect.catch(toDispatchFailure));
+            .pipe(Effect.tapError(cleanupUploads), Effect.catch(toDispatchFailure));
         }),
       );
   }),

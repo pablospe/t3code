@@ -8362,7 +8362,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         response,
       );
       assert.strictEqual(body.code, "internal_error");
-      assert.strictEqual(body.reason, "orchestration_dispatch_failed");
+      // The rollback is visible to the HTTP caller, matching the WebSocket
+      // error's bootstrapThreadDisposition: the thread id must not be reused.
+      assert.strictEqual(body.reason, "orchestration_bootstrap_rolled_back");
 
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
