@@ -458,6 +458,9 @@ export function projectEvent(
               : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.linkedPullRequest !== undefined
+              ? { linkedPullRequest: payload.linkedPullRequest }
+              : {}),
             ...(payload.taskDetails !== undefined ? { taskDetails: payload.taskDetails } : {}),
             ...(payload.workflowPreset !== undefined
               ? { workflowPreset: payload.workflowPreset }

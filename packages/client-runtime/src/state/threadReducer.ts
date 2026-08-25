@@ -220,6 +220,9 @@ export function applyThreadDetailEvent(
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
             : {}),
+          ...(event.payload.linkedPullRequest !== undefined
+            ? { linkedPullRequest: event.payload.linkedPullRequest }
+            : {}),
           ...(event.payload.taskDetails !== undefined
             ? { taskDetails: event.payload.taskDetails }
             : {}),

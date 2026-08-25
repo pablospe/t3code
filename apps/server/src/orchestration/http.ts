@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
-import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -100,17 +100,20 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           );
           // Same bootstrap handling as the WebSocket dispatch path: a
           // turn.start carrying `bootstrap` creates the thread (and worktree)
-          // before the turn itself runs.
+          // before the turn itself runs. Both paths drop attachments they
+          // uploaded when the dispatch fails.
+          const cleanupAttachments = () =>
+            cleanupFailedUploadedAttachments(args.payload, normalizedCommand);
           const toDispatchFailure = (cause: unknown) =>
             failEnvironmentInternal("orchestration_dispatch_failed", cause);
           if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
             return yield* turnStartBootstrap
               .dispatchTurnStart(normalizedCommand)
-              .pipe(Effect.catch(toDispatchFailure));
+              .pipe(Effect.tapError(cleanupAttachments), Effect.catch(toDispatchFailure));
           }
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)
-            .pipe(Effect.catch(toDispatchFailure));
+            .pipe(Effect.tapError(cleanupAttachments), Effect.catch(toDispatchFailure));
         }),
       );
   }),
