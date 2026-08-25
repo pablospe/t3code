@@ -99,10 +99,10 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
           // A failed dispatch must not strand attachments the request uploaded,
-          // whichever path it took.
-          const cleanupUploads = Effect.tapError(() =>
-            cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-          );
+          // whichever path it took. Inlined per pipe: hoisting the tapError
+          // into a shared pipeable erases the typed error channel.
+          const cleanupUploads = () =>
+            cleanupFailedUploadedAttachments(args.payload, normalizedCommand);
           const toDispatchFailure = (cause: unknown) =>
             failEnvironmentInternal("orchestration_dispatch_failed", cause);
           // Same bootstrap handling as the WebSocket dispatch path: a
@@ -110,7 +110,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           // before the turn itself runs.
           if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
             return yield* turnStartBootstrap.dispatchTurnStart(normalizedCommand).pipe(
-              cleanupUploads,
+              Effect.tapError(cleanupUploads),
               // The WebSocket path hands clients the error's
               // bootstrapThreadDisposition; over HTTP that signal survives as
               // its own reason, so a caller knows the thread is gone and a
@@ -124,7 +124,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           }
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)
-            .pipe(cleanupUploads, Effect.catch(toDispatchFailure));
+            .pipe(Effect.tapError(cleanupUploads), Effect.catch(toDispatchFailure));
         }),
       );
   }),
