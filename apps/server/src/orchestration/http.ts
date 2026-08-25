@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
-import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -98,13 +98,19 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
+          // A failed dispatch must not strand attachments the request uploaded,
+          // whichever path it took.
+          const cleanupUploads = Effect.tapError(() =>
+            cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
+          );
+          const toDispatchFailure = (cause: unknown) =>
+            failEnvironmentInternal("orchestration_dispatch_failed", cause);
           // Same bootstrap handling as the WebSocket dispatch path: a
           // turn.start carrying `bootstrap` creates the thread (and worktree)
           // before the turn itself runs.
-          const toDispatchFailure = (cause: unknown) =>
-            failEnvironmentInternal("orchestration_dispatch_failed", cause);
           if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
             return yield* turnStartBootstrap.dispatchTurnStart(normalizedCommand).pipe(
+              cleanupUploads,
               // The WebSocket path hands clients the error's
               // bootstrapThreadDisposition; over HTTP that signal survives as
               // its own reason, so a caller knows the thread is gone and a
@@ -118,7 +124,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           }
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)
-            .pipe(Effect.catch(toDispatchFailure));
+            .pipe(cleanupUploads, Effect.catch(toDispatchFailure));
         }),
       );
   }),
