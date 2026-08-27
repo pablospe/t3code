@@ -850,6 +850,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
             : {}),
+          ...(command.taskDetails !== undefined ? { taskDetails: command.taskDetails } : {}),
+          ...(command.workflowPreset !== undefined
+            ? { workflowPreset: command.workflowPreset }
+            : {}),
           updatedAt: occurredAt,
         },
       };

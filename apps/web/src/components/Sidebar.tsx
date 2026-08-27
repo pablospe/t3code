@@ -86,6 +86,7 @@ import { useShortcutModifierState } from "../shortcutModifierState";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
+import { useProjectScopeStore } from "../projectScopeStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
@@ -256,7 +257,7 @@ function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
 }
 
-function SidebarThreadTooltip({
+export function SidebarThreadTooltip({
   thread,
   projectTitle,
   projectCwd,
@@ -1964,6 +1965,11 @@ export default function Sidebar() {
       setProjectScopeKey(null);
     }
   }, [projectScopeKey, scopedProjectGroup]);
+  // The board (page and drawer) follows this selector instead of owning one.
+  const setBoardProjectScope = useProjectScopeStore((state) => state.setScopedProjectKeys);
+  useEffect(() => {
+    setBoardProjectScope(scopedProjectKeys);
+  }, [scopedProjectKeys, setBoardProjectScope]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from

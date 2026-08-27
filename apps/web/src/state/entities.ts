@@ -259,6 +259,17 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
   );
 }
 
+/** Whether the environment's server persists board task fields
+    (taskDetails / workflowPreset on thread.meta.update). Absent on older
+    servers, whose schema rejects the fields - clients hide the task-editing
+    affordances instead of sending commands that silently fail. */
+export function readEnvironmentSupportsTaskDetails(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadTaskDetails === true
+  );
+}
+
 /** Whether the environment's server understands thread.pin.reorder (and
     orderKey on thread.pin). Same version-skew contract as settlement. */
 export function readEnvironmentSupportsPinReorder(environmentId: EnvironmentId): boolean {

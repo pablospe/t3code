@@ -396,6 +396,34 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   }),
 );
 
+it.effect("decodes thread.meta-updated payloads carrying board task fields", () =>
+  Effect.gen(function* () {
+    const patched = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      taskDetails: "  Ship the board\nwith details  ",
+      workflowPreset: "review",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const cleared = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      taskDetails: null,
+      workflowPreset: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const untouched = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(patched.taskDetails, "Ship the board\nwith details");
+    assert.strictEqual(patched.workflowPreset, "review");
+    assert.strictEqual(cleared.taskDetails, null);
+    assert.strictEqual(cleared.workflowPreset, null);
+    assert.strictEqual(untouched.taskDetails, undefined);
+    assert.strictEqual(untouched.workflowPreset, undefined);
+  }),
+);
+
 it.effect("decodes thread archive and unarchive commands", () =>
   Effect.gen(function* () {
     const archive = yield* decodeOrchestrationCommand({

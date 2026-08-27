@@ -52,12 +52,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at,
           pinned_at,
           pin_order_key,
+          task_details,
+          workflow_preset,
           title_regeneration_request_id,
           title_regeneration_started_at,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
           has_actionable_proposed_plan,
+          actionable_proposed_plan_id,
           deleted_at
         )
         VALUES (
@@ -81,12 +84,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.snoozedAt},
           ${row.pinnedAt},
           ${row.pinOrderKey ?? null},
+          ${row.taskDetails ?? null},
+          ${row.workflowPreset ?? null},
           ${row.titleRegenerationRequestId ?? null},
           ${row.titleRegenerationStartedAt ?? null},
           ${row.latestUserMessageAt},
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
+          ${row.actionableProposedPlanId ?? null},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -110,12 +116,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at = excluded.snoozed_at,
           pinned_at = excluded.pinned_at,
           pin_order_key = excluded.pin_order_key,
+          task_details = excluded.task_details,
+          workflow_preset = excluded.workflow_preset,
           title_regeneration_request_id = excluded.title_regeneration_request_id,
           title_regeneration_started_at = excluded.title_regeneration_started_at,
           latest_user_message_at = excluded.latest_user_message_at,
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
+          actionable_proposed_plan_id = excluded.actionable_proposed_plan_id,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -146,12 +155,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
+          task_details AS "taskDetails",
+          workflow_preset AS "workflowPreset",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          actionable_proposed_plan_id AS "actionableProposedPlanId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -184,12 +196,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
+          task_details AS "taskDetails",
+          workflow_preset AS "workflowPreset",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          actionable_proposed_plan_id AS "actionableProposedPlanId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

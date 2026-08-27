@@ -1,4 +1,10 @@
-import { Maximize2Icon, Minimize2Icon, PanelBottomIcon, PanelRightIcon } from "lucide-react";
+import {
+  Maximize2Icon,
+  Minimize2Icon,
+  PanelBottomIcon,
+  PanelRightIcon,
+  PanelTopIcon,
+} from "lucide-react";
 import { memo } from "react";
 
 import { Toggle } from "../ui/toggle";
@@ -15,6 +21,10 @@ interface PanelLayoutControlsProps {
   rightPanelUnavailableLabel?: string;
   /** Running + waiting subagents in this thread; badges the right panel toggle. */
   liveAgentCount: number;
+  /** The board drawer toggle renders only where a handler is provided. */
+  boardDrawerOpen?: boolean;
+  boardShortcutLabel?: string | null;
+  onToggleBoardDrawer?: () => void;
   onToggleTerminal: () => void;
   onToggleRightPanel: () => void;
 }
@@ -29,6 +39,9 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelShortcutLabel,
   rightPanelUnavailableLabel = "Right panel is unavailable",
   liveAgentCount,
+  boardDrawerOpen = false,
+  boardShortcutLabel = null,
+  onToggleBoardDrawer,
   onToggleTerminal,
   onToggleRightPanel,
 }: PanelLayoutControlsProps) {
@@ -37,6 +50,27 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {onToggleBoardDrawer ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0 [-webkit-app-region:no-drag]"
+                pressed={boardDrawerOpen}
+                onPressedChange={onToggleBoardDrawer}
+                aria-label="Toggle board drawer"
+                variant="ghost"
+                size="sm"
+              >
+                <PanelTopIcon className="size-4" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">
+            {`Toggle board drawer${boardShortcutLabel ? ` (${boardShortcutLabel})` : ""}`}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
       {showTerminalControl ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>

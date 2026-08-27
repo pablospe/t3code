@@ -251,6 +251,7 @@ import {
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
+import { useBoardDrawerStore } from "../boardDrawerStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -284,6 +285,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
+import { BoardDrawer } from "./board/BoardDrawer";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1341,6 +1343,22 @@ function ChatViewContent(props: ChatViewProps) {
     [routeServerThreadShell, threadDetailLoading],
   );
   const activeServerThread = serverThread ?? loadingServerThread;
+  // A backlog thread carries its queued task details, so opening it seeds
+  // the composer and the queued prompt is one Send away. Only before the
+  // first turn, never over typed content, and once per visit so a composer
+  // the user cleared stays cleared.
+  const seededTaskDetailsThreadKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (routeKind !== "server" || !routeServerThreadShell) return;
+    if (seededTaskDetailsThreadKey.current === routeThreadKey) return;
+    const details = routeServerThreadShell.taskDetails?.trim();
+    if (!details || routeServerThreadShell.latestTurn !== null) return;
+    const store = useComposerDraftStore.getState();
+    const draft = store.getComposerDraft(routeThreadRef);
+    if (draft && draft.prompt.trim() !== "") return;
+    store.setPrompt(routeThreadRef, details);
+    seededTaskDetailsThreadKey.current = routeThreadKey;
+  }, [routeKind, routeServerThreadShell, routeThreadKey, routeThreadRef]);
   // Pagination window state for the routed server thread: drives the
   // "load earlier turns" header when the loaded window has older history.
   const routeThreadState = useEnvironmentThread(
@@ -1512,6 +1530,8 @@ function ChatViewContent(props: ChatViewProps) {
     return () => observer.disconnect();
   }, [composerOverlayElement]);
 
+  const boardDrawerOpen = useBoardDrawerStore((state) => state.open);
+  const toggleBoardDrawer = useBoardDrawerStore((state) => state.toggle);
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
   );
@@ -5147,6 +5167,13 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      if (command === "board.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleBoardDrawer();
+        return;
+      }
+
       if (command === "rightPanel.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -5264,6 +5291,7 @@ function ChatViewContent(props: ChatViewProps) {
     toggleRightPanel,
     toggleRightPanelMaximized,
     toggleTerminalVisibility,
+    toggleBoardDrawer,
     composerRef,
   ]);
 
@@ -6666,6 +6694,9 @@ function ChatViewContent(props: ChatViewProps) {
 
   const panelToggleControls = (
     <PanelLayoutControls
+      boardDrawerOpen={boardDrawerOpen}
+      boardShortcutLabel={shortcutLabelForCommand(keybindings, "board.toggle")}
+      onToggleBoardDrawer={toggleBoardDrawer}
       terminalAvailable={activeProject !== null}
       terminalOpen={terminalUiState.terminalOpen}
       terminalShortcutLabel={shortcutLabelForCommand(keybindings, "terminal.toggle")}
@@ -6875,6 +6906,7 @@ function ChatViewContent(props: ChatViewProps) {
             setThreadErrorBannerDismissTick((tick) => tick + 1);
           }}
         />
+        <BoardDrawer />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}

@@ -1,0 +1,310 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import type { SidebarThreadSummary } from "~/types";
+
+import {
+  BOARD_COLUMNS,
+  groupThreadsIntoBoardColumns,
+  isBoardTransitionAllowed,
+  isThreadSnoozed,
+  resolveBoardColumn,
+  resolveDoneReturnColumn,
+  substituteBoardPromptPlaceholders,
+} from "./boardColumns.logic";
+
+type TestThread = Parameters<typeof resolveBoardColumn>[0] &
+  Pick<SidebarThreadSummary, "id" | "createdAt" | "updatedAt" | "latestUserMessageAt">;
+
+const makeSession = (
+  status: NonNullable<SidebarThreadSummary["session"]>["status"],
+  activeTurnId: string | null = null,
+) => ({ status, activeTurnId }) as unknown as SidebarThreadSummary["session"];
+
+const completedTurn = {
+  turnId: "turn-1",
+  state: "completed",
+  requestedAt: "2026-08-20T10:00:00.000Z",
+  startedAt: "2026-08-20T10:00:05.000Z",
+  completedAt: "2026-08-20T10:04:00.000Z",
+  assistantMessageId: null,
+} as unknown as SidebarThreadSummary["latestTurn"];
+
+function makeThread(overrides: Partial<TestThread> = {}): TestThread {
+  return {
+    id: "thread-1" as SidebarThreadSummary["id"],
+    createdAt: "2026-08-20T10:00:00.000Z",
+    updatedAt: "2026-08-20T10:00:00.000Z",
+    latestUserMessageAt: null,
+    archivedAt: null,
+    settledOverride: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    interactionMode: "default",
+    latestTurn: null,
+    session: null,
+    backgroundLiveness: null,
+    ...overrides,
+  };
+}
+
+describe("resolveBoardColumn", () => {
+  it("puts archived threads in done regardless of other state", () => {
+    const thread = makeThread({
+      archivedAt: "2026-08-20T12:00:00.000Z",
+      session: makeSession("running", "turn-1"),
+      hasPendingApprovals: true,
+    });
+    expect(resolveBoardColumn(thread)).toBe("done");
+  });
+
+  it("keeps blocked work visible: pending approval outranks an explicit settle", () => {
+    const thread = makeThread({ settledOverride: "settled", hasPendingApprovals: true });
+    expect(resolveBoardColumn(thread)).toBe("review");
+  });
+
+  it("keeps running work visible: a live session outranks an explicit settle", () => {
+    const thread = makeThread({
+      settledOverride: "settled",
+      session: makeSession("running", "turn-1"),
+    });
+    expect(resolveBoardColumn(thread)).toBe("running");
+  });
+
+  it("puts explicitly settled idle threads in done", () => {
+    const thread = makeThread({ settledOverride: "settled", latestTurn: completedTurn });
+    expect(resolveBoardColumn(thread)).toBe("done");
+  });
+
+  it("maps a starting session and background liveness to running", () => {
+    expect(resolveBoardColumn(makeThread({ session: makeSession("starting") }))).toBe("running");
+    expect(resolveBoardColumn(makeThread({ backgroundLiveness: "monitoring" }))).toBe("running");
+  });
+
+  it("routes awaiting-input and failed sessions to review", () => {
+    expect(resolveBoardColumn(makeThread({ hasPendingUserInput: true }))).toBe("review");
+    expect(resolveBoardColumn(makeThread({ session: makeSession("error") }))).toBe("review");
+  });
+
+  it("puts an actionable plan on a settled plan-mode turn in planning", () => {
+    const thread = makeThread({
+      interactionMode: "plan",
+      latestTurn: completedTurn,
+      hasActionableProposedPlan: true,
+    });
+    expect(resolveBoardColumn(thread)).toBe("planning");
+  });
+
+  it("keeps any quiet plan-mode thread that has run in planning", () => {
+    const thread = makeThread({ interactionMode: "plan", latestTurn: completedTurn });
+    expect(resolveBoardColumn(thread)).toBe("planning");
+  });
+
+  it("puts a natively captured proposed plan in planning even in default mode", () => {
+    const thread = makeThread({ latestTurn: completedTurn, hasActionableProposedPlan: true });
+    expect(resolveBoardColumn(thread)).toBe("planning");
+  });
+
+  it("keeps plan-phase threads in planning even while running or unstarted", () => {
+    expect(
+      resolveBoardColumn(
+        makeThread({ interactionMode: "plan", session: makeSession("running", "turn-1") }),
+      ),
+    ).toBe("planning");
+    expect(resolveBoardColumn(makeThread({ interactionMode: "plan" }))).toBe("planning");
+  });
+
+  it("moves a running plan-implementation turn to running despite the plan pin", () => {
+    const implementingTurn = {
+      ...(completedTurn as object),
+      state: "running",
+      completedAt: null,
+      sourceProposedPlan: { threadId: "thread-1", planId: "plan-1" },
+    } as SidebarThreadSummary["latestTurn"];
+    // The approve flow stamps sourceProposedPlan on the implementation turn;
+    // both the legacy mode pin and a stale actionable flag must yield to it.
+    expect(
+      resolveBoardColumn(
+        makeThread({
+          interactionMode: "plan",
+          hasActionableProposedPlan: true,
+          latestTurn: implementingTurn,
+          session: makeSession("running", "turn-1"),
+        }),
+      ),
+    ).toBe("running");
+  });
+
+  it("lands a finished plan implementation in review, not back in planning", () => {
+    // Once the server stamps implementedAt on the approved plan the actionable
+    // flag drops, so the completed implementation turn must fall through to
+    // review instead of bouncing the card back to planning.
+    const implementedTurn = {
+      ...(completedTurn as object),
+      sourceProposedPlan: { threadId: "thread-1", planId: "plan-1" },
+    } as SidebarThreadSummary["latestTurn"];
+    expect(
+      resolveBoardColumn(
+        makeThread({
+          hasActionableProposedPlan: false,
+          latestTurn: implementedTurn,
+          session: makeSession("ready"),
+        }),
+      ),
+    ).toBe("review");
+  });
+
+  it("routes plan-phase attention states to review", () => {
+    expect(
+      resolveBoardColumn(makeThread({ interactionMode: "plan", hasPendingApprovals: true })),
+    ).toBe("review");
+  });
+
+  it("puts threads that never ran a turn in backlog", () => {
+    expect(resolveBoardColumn(makeThread())).toBe("backlog");
+  });
+
+  it("puts quiet threads with a finished turn in review", () => {
+    expect(resolveBoardColumn(makeThread({ latestTurn: completedTurn }))).toBe("review");
+  });
+});
+
+describe("substituteBoardPromptPlaceholders", () => {
+  it("replaces every {title} with the card's title", () => {
+    expect(
+      substituteBoardPromptPlaceholders("/opsx:propose {title} - {title}", {
+        title: "Fix the board",
+      }),
+    ).toBe("/opsx:propose Fix the board - Fix the board");
+  });
+
+  it("fills {task} with the stored details", () => {
+    expect(
+      substituteBoardPromptPlaceholders("Task: {task}", {
+        title: "Fix the board",
+        details: "Cards dropped on Planning must send the full brief.",
+      }),
+    ).toBe("Task: Cards dropped on Planning must send the full brief.");
+  });
+
+  it("substitutes both placeholders in one template", () => {
+    expect(
+      substituteBoardPromptPlaceholders("{title}\n\n{task}", {
+        title: "Fix the board",
+        details: "Full brief",
+      }),
+    ).toBe("Fix the board\n\nFull brief");
+  });
+
+  it("falls back to the title when details are missing or blank", () => {
+    expect(substituteBoardPromptPlaceholders("{task}", { title: "Fix the board" })).toBe(
+      "Fix the board",
+    );
+    expect(
+      substituteBoardPromptPlaceholders("{task}", { title: "Fix the board", details: "   " }),
+    ).toBe("Fix the board");
+    expect(
+      substituteBoardPromptPlaceholders("{task}", { title: "Fix the board", details: null }),
+    ).toBe("Fix the board");
+  });
+});
+
+describe("isBoardTransitionAllowed", () => {
+  it("follows the forward decision tree", () => {
+    expect(isBoardTransitionAllowed("backlog", "planning")).toBe(true);
+    expect(isBoardTransitionAllowed("backlog", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("backlog", "running")).toBe(false);
+    expect(isBoardTransitionAllowed("backlog", "review")).toBe(false);
+    expect(isBoardTransitionAllowed("planning", "running")).toBe(true);
+    expect(isBoardTransitionAllowed("planning", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("planning", "backlog")).toBe(false);
+    expect(isBoardTransitionAllowed("running", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("running", "review")).toBe(false);
+    expect(isBoardTransitionAllowed("review", "done")).toBe(true);
+    expect(isBoardTransitionAllowed("review", "planning")).toBe(true);
+    expect(isBoardTransitionAllowed("review", "running")).toBe(true);
+    expect(isBoardTransitionAllowed("review", "backlog")).toBe(false);
+  });
+
+  it("routes done drags only to the true unsettle destination", () => {
+    expect(isBoardTransitionAllowed("done", "review")).toBe(false);
+    const settledReview = makeThread({ settledOverride: "settled", latestTurn: completedTurn });
+    expect(resolveDoneReturnColumn(settledReview)).toBe("review");
+    const settledPlan = makeThread({
+      settledOverride: "settled",
+      latestTurn: completedTurn,
+      interactionMode: "plan",
+    });
+    expect(resolveDoneReturnColumn(settledPlan)).toBe("planning");
+  });
+});
+
+describe("groupThreadsIntoBoardColumns", () => {
+  it("returns every column in board order, including empty ones", () => {
+    const columns = groupThreadsIntoBoardColumns([]);
+    expect(columns.map((column) => column.definition.key)).toEqual(
+      BOARD_COLUMNS.map((definition) => definition.key),
+    );
+    expect(columns.every((column) => column.threads.length === 0)).toBe(true);
+  });
+
+  it("orders a column by most recent activity, newest first", () => {
+    const older = makeThread({
+      id: "thread-old" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-19T10:00:00.000Z",
+    });
+    const newer = makeThread({
+      id: "thread-new" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-20T10:00:00.000Z",
+      latestUserMessageAt: "2026-08-20T18:00:00.000Z",
+    });
+    const columns = groupThreadsIntoBoardColumns([older, newer]);
+    const backlog = columns.find((column) => column.definition.key === "backlog");
+    expect(backlog?.threads.map((thread) => thread.id)).toEqual(["thread-new", "thread-old"]);
+  });
+
+  it("sinks snoozed threads to the column tail ordered by wake time", () => {
+    const NOW = Date.parse("2026-08-21T12:00:00.000Z");
+    const awake = makeThread({
+      id: "thread-awake" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-19T10:00:00.000Z",
+    });
+    const wakesLater = makeThread({
+      id: "thread-later" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-21T11:00:00.000Z",
+      snoozedUntil: "2026-08-22T09:00:00.000Z",
+    });
+    const wakesSoon = makeThread({
+      id: "thread-soon" as SidebarThreadSummary["id"],
+      updatedAt: "2026-08-21T11:30:00.000Z",
+      snoozedUntil: "2026-08-21T15:00:00.000Z",
+    });
+    const columns = groupThreadsIntoBoardColumns([wakesLater, awake, wakesSoon], undefined, NOW);
+    const backlog = columns.find((column) => column.definition.key === "backlog");
+    expect(backlog?.threads.map((thread) => thread.id)).toEqual([
+      "thread-awake",
+      "thread-soon",
+      "thread-later",
+    ]);
+    // A passed wake time stops classifying as snoozed - the thread floats back.
+    expect(isThreadSnoozed(wakesSoon, Date.parse("2026-08-21T16:00:00.000Z"))).toBe(false);
+    expect(isThreadSnoozed(wakesSoon, NOW)).toBe(true);
+    expect(isThreadSnoozed(awake, NOW)).toBe(false);
+  });
+
+  it("splits threads into their derived columns", () => {
+    const running = makeThread({
+      id: "thread-running" as SidebarThreadSummary["id"],
+      session: makeSession("running", "turn-1"),
+    });
+    const done = makeThread({
+      id: "thread-done" as SidebarThreadSummary["id"],
+      archivedAt: "2026-08-20T12:00:00.000Z",
+    });
+    const columns = groupThreadsIntoBoardColumns([running, done]);
+    const byKey = new Map(columns.map((column) => [column.definition.key, column.threads]));
+    expect(byKey.get("running")?.map((thread) => thread.id)).toEqual(["thread-running"]);
+    expect(byKey.get("done")?.map((thread) => thread.id)).toEqual(["thread-done"]);
+    expect(byKey.get("backlog")).toEqual([]);
+  });
+});

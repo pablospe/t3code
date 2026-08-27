@@ -40,6 +40,7 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  KanbanIcon,
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
@@ -1620,6 +1621,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/settings" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:board",
+    searchTerms: ["board", "kanban", "columns", "backlog", "review"],
+    title: "Open board",
+    icon: <KanbanIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/board" });
     },
   });
 

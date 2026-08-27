@@ -306,6 +306,8 @@ export function projectEvent(
             unsettledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
+            taskDetails: null,
+            workflowPreset: null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -470,6 +472,10 @@ export function projectEvent(
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
             ...(payload.linkedPullRequest !== undefined
               ? { linkedPullRequest: payload.linkedPullRequest }
+              : {}),
+            ...(payload.taskDetails !== undefined ? { taskDetails: payload.taskDetails } : {}),
+            ...(payload.workflowPreset !== undefined
+              ? { workflowPreset: payload.workflowPreset }
               : {}),
             updatedAt: payload.updatedAt,
           }),

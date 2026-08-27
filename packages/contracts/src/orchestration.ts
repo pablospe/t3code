@@ -435,6 +435,11 @@ export const OrchestrationThread = Schema.Struct({
   // servers never need each other's threads to agree on the merged list.
   // Optional so payloads from pre-reorder servers still decode.
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Queued task description the board shows on the card and delivers as the
+  // first prompt when the thread starts, plus the drop-prompt preset chosen
+  // for it. Optional so payloads from older servers still decode.
+  taskDetails: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workflowPreset: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -497,12 +502,24 @@ export const OrchestrationThreadShell = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Queued task description the board shows on the card and delivers as the
+  // first prompt when the thread starts, plus the drop-prompt preset chosen
+  // for it. Optional so payloads from older servers still decode.
+  taskDetails: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workflowPreset: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
+  /**
+   * Id of the plan hasActionableProposedPlan points at, so a client can start
+   * the implementation turn against it without loading the thread detail.
+   * Null whenever hasActionableProposedPlan is false. Optional so payloads
+   * from older servers still decode.
+   */
+  actionableProposedPlanId: Schema.optional(Schema.NullOr(OrchestrationProposedPlanId)),
   /**
    * Native background work alive after the turn settles: "working" while
    * subagents/workflows run, "monitoring" when watch loops are the only
@@ -802,6 +819,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  taskDetails: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workflowPreset: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1246,6 +1265,10 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Board task fields. Keeping these on the existing event lets older clients
+      safely ignore the new fields. Null clears, absent leaves untouched. */
+  taskDetails: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workflowPreset: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: IsoDateTime,
 });
 
