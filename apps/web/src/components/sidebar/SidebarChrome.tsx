@@ -152,13 +152,15 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) =>
       /^\/settings(?:\/|$)/.test(location.pathname)
         ? "settings"
-        : location.pathname === "/usage"
-          ? "usage"
-          : location.pathname === "/pull-requests"
-            ? "pull-requests"
-            : location.pathname === "/board"
-              ? "board"
-              : null,
+        : /^\/projects\/[^/]+\/?$/.test(location.pathname)
+          ? "project-settings"
+          : location.pathname === "/usage"
+            ? "usage"
+            : location.pathname === "/pull-requests"
+              ? "pull-requests"
+              : location.pathname === "/board"
+                ? "board"
+                : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for

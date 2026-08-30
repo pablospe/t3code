@@ -27,6 +27,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
+import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
 
 export type TurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
 
@@ -98,6 +99,7 @@ const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>) => {
 
 export const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const threadDeletionReactor = yield* ThreadDeletionReactor;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -298,7 +300,7 @@ export const make = Effect.gen(function* () {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread) {
-          yield* dispatch({
+          const created = yield* dispatch({
             type: "thread.create",
             commandId: yield* serverCommandId("bootstrap-thread-create"),
             threadId: command.threadId,
@@ -311,6 +313,11 @@ export const make = Effect.gen(function* () {
             worktreePath: bootstrap.createThread.worktreePath,
             createdAt: bootstrap.createThread.createdAt,
           });
+          // The successful create is a fence in the engine command queue:
+          // every delete for the prior incarnation committed before it.
+          // Drain through that event before setup or turn start can own
+          // terminals and provider sessions under the reused thread id.
+          yield* threadDeletionReactor.drainThrough(created.sequence);
           createdThread = true;
         }
 
