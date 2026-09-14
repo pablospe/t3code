@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { useMemo } from "react";
 
 import { deriveProviderInstanceEntries, shouldShowInstanceBadge } from "~/providerInstances";
@@ -36,9 +37,9 @@ export function BoardCardTooltip({
     [projects, thread.environmentId, thread.projectId],
   );
   const { environments } = useEnvironments();
-  const environmentLabel =
-    environments.find((environment) => environment.environmentId === thread.environmentId)?.label ??
-    null;
+  const environment =
+    environments.find((candidate) => candidate.environmentId === thread.environmentId) ?? null;
+  const environmentLabel = environment?.label ?? null;
 
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntries = useMemo(
@@ -83,9 +84,14 @@ export function BoardCardTooltip({
     <SidebarThreadTooltip
       thread={thread}
       projectTitle={projectTitle}
+      // The board groups by project, not by the sidebar's project groups, so
+      // the card's own title is the name to show.
+      projectDisplayName={projectTitle}
       projectCwd={project?.workspaceRoot ?? null}
       projectFaviconPath={project?.faviconPath ?? null}
+      projectIcon={project?.projectIcon ?? null}
       environmentLabel={environmentLabel}
+      environmentMachine={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
       providerEntry={providerEntry}
       showInstanceBadge={showInstanceBadge}
       modelInstanceId={modelInstanceId}
