@@ -1,9 +1,29 @@
 import { describe, expect, it } from "vite-plus/test";
-import { MessageId, TurnId } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  CheckpointRef,
+  EnvironmentId,
+  EventId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+  type OrchestrationThread,
+  type WorktreeSetupSnapshot,
+} from "@t3tools/contracts";
+import {
+  applyThreadDetailEvent,
+  createEnvironmentThreadDetailAtoms,
+  EMPTY_ENVIRONMENT_THREAD_STATE,
+} from "@t3tools/client-runtime/state/threads";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  deriveMessagesTimelineRowsWithState,
   liveWorkEntryLabel,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
@@ -11,8 +31,608 @@ import {
   shouldFollowWorkGroupAppend,
   shouldPreserveAssistantLineBreaks,
   type MessagesTimelineRow,
+  type MessagesTimelineRowsProjection,
+  WORKTREE_SETUP_ROW_ID,
   workEntryDisplayLabel,
 } from "./MessagesTimeline.logic";
+import {
+  createMessageAttachmentPreviewProjector,
+  deriveTimelineEntries,
+  deriveTimelineEntriesWithState,
+  type WorkLogEntry,
+  type TimelineEntriesProjection,
+} from "../../session-logic";
+import { isImageAttachment, type ChatMessage, type TurnDiffSummary } from "../../types";
+
+describe("streaming row projection", () => {
+  function fixture(text = "") {
+    const turnId = TurnId.make("live-turn");
+    const historyTurnId = TurnId.make("history-turn");
+    const time = (second: number) => new Date(Date.UTC(2026, 8, 4, 0, 0, second)).toISOString();
+    const messages: ChatMessage[] = [
+      {
+        id: MessageId.make("history-user"),
+        role: "user",
+        text: "Inspect",
+        turnId: null,
+        createdAt: time(0),
+        updatedAt: time(0),
+        streaming: false,
+      },
+      {
+        id: MessageId.make("history-assistant"),
+        role: "assistant",
+        text: "Done",
+        turnId: historyTurnId,
+        createdAt: time(3),
+        updatedAt: time(4),
+        streaming: false,
+      },
+      {
+        id: MessageId.make("live-user"),
+        role: "user",
+        text: "Continue",
+        turnId: null,
+        createdAt: time(5),
+        updatedAt: time(5),
+        streaming: false,
+      },
+      {
+        id: MessageId.make("live-assistant"),
+        role: "assistant",
+        text,
+        turnId,
+        createdAt: time(7),
+        updatedAt: time(7),
+        streaming: true,
+      },
+    ];
+    const work: WorkLogEntry[] = [
+      {
+        id: "history-work",
+        turnId: historyTurnId,
+        createdAt: time(1),
+        label: "Ran command",
+        tone: "tool",
+        command: "vp test",
+        toolCallId: "history-tool",
+        toolLifecycleStatus: "failed",
+        sourceActivityKind: "tool.completed",
+      },
+      {
+        id: "live-work",
+        turnId,
+        createdAt: time(6),
+        label: "Read file",
+        tone: "tool",
+        changedFiles: ["/repo/src/index.ts"],
+        toolCallId: "live-tool",
+        toolLifecycleStatus: "completed",
+        sourceActivityKind: "tool.completed",
+      },
+    ];
+    const timeline = deriveTimelineEntriesWithState(messages, [], work);
+    const input = {
+      timelineEntries: timeline.entries,
+      latestTurn: { turnId, state: "running", startedAt: time(5), completedAt: null },
+      runningTurnId: turnId,
+      isWorking: true,
+      activeTurnStartedAt: time(5),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    } satisfies Parameters<typeof deriveMessagesTimelineRows>[0];
+    return { messages, work, timeline, input, time, turnId, historyTurnId };
+  }
+
+  it.each([
+    ["", "Now visible"],
+    [" \n", "Now visible"],
+    ["Visible", ""],
+    ["", " \t\n"],
+    ["Visible", "★ Insight\nKeep these line breaks"],
+  ])("keeps row parity and history identity when text changes from %j to %j", (before, after) => {
+    const initial = fixture(before);
+    const previous = deriveMessagesTimelineRowsWithState(initial.input);
+    Object.freeze(previous.rows);
+    for (const row of previous.rows) Object.freeze(row);
+    const last = initial.messages.at(-1)!;
+    const messages = [
+      ...initial.messages.slice(0, -1),
+      { ...last, text: after, updatedAt: initial.time(8) },
+    ];
+    const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+    const input = { ...initial.input, timelineEntries: timeline.entries };
+    const next = deriveMessagesTimelineRowsWithState(input, previous);
+
+    expect(next.rows).toEqual(
+      deriveMessagesTimelineRows({
+        ...input,
+        timelineEntries: deriveTimelineEntries(messages, [], initial.work),
+      }),
+    );
+    for (const [index, row] of previous.rows.entries()) {
+      if ((row.kind === "message" || row.kind === "assistant-meta") && row.message === last) {
+        expect(next.rows[index]).toMatchObject({ message: { text: after } });
+        expect(row.message.text).toBe(before);
+      } else {
+        expect(next.rows[index]).toBe(row);
+      }
+    }
+  });
+
+  it("keeps earlier emitted rows unchanged across two projection branches", () => {
+    const initial = fixture();
+    const previous = deriveMessagesTimelineRowsWithState(initial.input);
+    const last = initial.messages.at(-1)!;
+    const branch = (text: string) => {
+      const messages = [...initial.messages.slice(0, -1), { ...last, text }];
+      const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+      const input = { ...initial.input, timelineEntries: timeline.entries };
+      const projection = deriveMessagesTimelineRowsWithState(input, previous);
+      expect(projection.rows).toEqual(deriveMessagesTimelineRows(input));
+      return projection;
+    };
+    const first = branch("First branch");
+    const savedFirst = structuredClone(first.rows);
+    branch("Second branch");
+    expect(first.rows).toEqual(savedFirst);
+    expect(previous.rows).toEqual(deriveMessagesTimelineRows(initial.input));
+  });
+
+  it.each(["file", "image", "handoff", "streaming-image"] as const)(
+    "preserves stream reuse through the real %s preview materializer",
+    (kind) => {
+      const initial = fixture("Partial");
+      const image = {
+        type: "image" as const,
+        id: "image",
+        name: "image.png",
+        mimeType: "image/png",
+        sizeBytes: 42,
+      };
+      const file = {
+        type: "file" as const,
+        id: "file",
+        name: "file.txt",
+        mimeType: "text/plain",
+        sizeBytes: 8,
+      };
+      const source = initial.messages.map((message, index) =>
+        index === 0 || (kind === "streaming-image" && index === initial.messages.length - 1)
+          ? { ...message, attachments: kind === "file" ? [file] : [image, file] }
+          : message,
+      );
+      const server = createMessageAttachmentPreviewProjector();
+      const handoff = createMessageAttachmentPreviewProjector();
+      const materialize = (messages: ReadonlyArray<ChatMessage>, url: string) => {
+        const urls = new Map(kind === "handoff" ? [] : [[image.id, url]]);
+        return messages.map((message) => {
+          const displayed = server(message, (attachment) => urls.get(attachment.id));
+          return kind === "handoff" && message.role === "user"
+            ? handoff(displayed, (attachment) =>
+                isImageAttachment(attachment) ? "blob:handoff" : undefined,
+              )
+            : displayed;
+        });
+      };
+      const firstMessages = materialize(source, "https://first.test/image");
+      const firstTimeline = deriveTimelineEntriesWithState(firstMessages, [], initial.work);
+      const input = { ...initial.input, timelineEntries: firstTimeline.entries };
+      const previous = deriveMessagesTimelineRowsWithState(input);
+      const saved = structuredClone(previous.rows);
+      const nextSource = [...source.slice(0, -1), { ...source.at(-1)!, text: "Next token" }];
+      const nextMessages = materialize(nextSource, "https://first.test/image");
+      const nextTimeline = deriveTimelineEntriesWithState(
+        nextMessages,
+        [],
+        initial.work,
+        firstTimeline,
+      );
+      const nextInput = { ...input, timelineEntries: nextTimeline.entries };
+      const next = deriveMessagesTimelineRowsWithState(nextInput, previous);
+
+      expect(nextMessages[0]).toBe(firstMessages[0]);
+      expect(next.rows).toEqual(deriveMessagesTimelineRows(nextInput));
+      for (const [index, row] of previous.rows.entries()) {
+        if (
+          (row.kind === "message" || row.kind === "assistant-meta") &&
+          row.message.id === source.at(-1)?.id
+        )
+          continue;
+        expect(next.rows[index]).toBe(row);
+      }
+      expect(previous.rows).toEqual(saved);
+
+      if (kind === "image" || kind === "streaming-image") {
+        const renewed = materialize(nextSource, "https://renewed.test/image");
+        const renewedTimeline = deriveTimelineEntriesWithState(
+          renewed,
+          [],
+          initial.work,
+          nextTimeline,
+        );
+        const renewedInput = { ...input, timelineEntries: renewedTimeline.entries };
+        const renewedRows = deriveMessagesTimelineRowsWithState(renewedInput, next);
+        expect(renewedRows.rows).toEqual(deriveMessagesTimelineRows(renewedInput));
+        expect(renewed[0]?.attachments?.[0]).toMatchObject({
+          previewUrl: "https://renewed.test/image",
+        });
+        expect(firstMessages[0]?.attachments?.[0]).toMatchObject({
+          previewUrl: "https://first.test/image",
+        });
+      }
+    },
+  );
+
+  it("owns checkpoint lookups across streaming and equal source snapshots", () => {
+    const initial = fixture("Partial");
+    let checkpointLookupReads = 0;
+    const summary: TurnDiffSummary = {
+      turnId: initial.historyTurnId,
+      get checkpointTurnCount() {
+        checkpointLookupReads += 1;
+        return 1;
+      },
+      checkpointRef: CheckpointRef.make("refs/t3/checkpoints/history-turn"),
+      status: "ready",
+      files: [],
+      get assistantMessageId() {
+        checkpointLookupReads += 1;
+        return MessageId.make("history-assistant");
+      },
+      get completedAt() {
+        checkpointLookupReads += 1;
+        return initial.time(4);
+      },
+    };
+    const input = {
+      ...initial.input,
+      turnDiffSummaries: [summary],
+      supportsConversationRollback: true,
+      expandedTurnIds: new Set([initial.historyTurnId]),
+      expandedWorkGroupIds: new Set<string>(),
+    };
+    const previous = deriveMessagesTimelineRowsWithState(input);
+    expect(checkpointLookupReads).toBeGreaterThan(0);
+    expect(previous.rows.some((row) => row.kind === "message" && row.revertTurnCount === 0)).toBe(
+      true,
+    );
+    const last = initial.messages.at(-1)!;
+    const messages = [...initial.messages.slice(0, -1), { ...last, text: "Partial token" }];
+    const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+    const nextInput = {
+      ...input,
+      timelineEntries: timeline.entries,
+      turnDiffSummaries: [...input.turnDiffSummaries],
+      latestTurn: { ...input.latestTurn },
+      expandedTurnIds: new Set(input.expandedTurnIds),
+      expandedWorkGroupIds: new Set(input.expandedWorkGroupIds),
+    };
+    checkpointLookupReads = 0;
+    const next = deriveMessagesTimelineRowsWithState(nextInput, previous);
+    expect(checkpointLookupReads).toBe(0);
+    expect(next.rows).toEqual(deriveMessagesTimelineRows(nextInput));
+    for (const [index, row] of previous.rows.entries()) {
+      if ((row.kind === "message" || row.kind === "assistant-meta") && row.message === last) {
+        expect(next.rows[index]).toMatchObject({ message: { text: "Partial token" } });
+      } else {
+        expect(next.rows[index]).toBe(row);
+      }
+    }
+
+    const changed = deriveMessagesTimelineRowsWithState(
+      { ...nextInput, turnDiffSummaries: [{ ...summary, checkpointTurnCount: 3 }] },
+      next,
+    );
+    expect(
+      changed.rows.find((row) => row.kind === "message" && row.message.id === messages[0]?.id),
+    ).toMatchObject({ revertTurnCount: 2 });
+    const unsupported = deriveMessagesTimelineRowsWithState(
+      { ...changed.input, supportsConversationRollback: false },
+      changed,
+    );
+    expect(
+      unsupported.rows.find((row) => row.kind === "message" && row.message.id === messages[0]?.id),
+    ).toMatchObject({ revertTurnCount: undefined });
+    expect(
+      previous.rows.find((row) => row.kind === "message" && row.message.id === messages[0]?.id),
+    ).toMatchObject({ revertTurnCount: 0 });
+  });
+
+  it("reuses long-thread rows through detail events, selectors, and attachment previews", () => {
+    const initial = fixture("Partial");
+    let checkpointLookupReads = 0;
+    const history = Array.from({ length: 250 }, (_, index) => {
+      const turnId = TurnId.make(`older-turn-${index}`);
+      const user = {
+        ...initial.messages[0]!,
+        id: MessageId.make(`older-user-${index}`),
+        createdAt: new Date(Date.UTC(2026, 8, 3, 0, 0, index * 5)).toISOString(),
+        attachments: [
+          {
+            type: "image" as const,
+            id: "image",
+            name: "image.png",
+            mimeType: "image/png",
+            sizeBytes: 42,
+          },
+        ],
+      };
+      const assistant = {
+        ...initial.messages[1]!,
+        id: MessageId.make(`older-assistant-${index}`),
+        turnId,
+        createdAt: new Date(Date.UTC(2026, 8, 3, 0, 0, index * 5 + 3)).toISOString(),
+      };
+      const checkpoint: TurnDiffSummary = {
+        turnId,
+        get checkpointTurnCount() {
+          checkpointLookupReads += 1;
+          return index + 1;
+        },
+        checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/older-${index}`),
+        status: "ready",
+        files: [],
+        get assistantMessageId() {
+          checkpointLookupReads += 1;
+          return assistant.id;
+        },
+        get completedAt() {
+          checkpointLookupReads += 1;
+          return assistant.createdAt;
+        },
+      };
+      return { user, assistant, checkpoint };
+    });
+    const liveMessage = initial.messages.at(-1)!;
+    let thread: OrchestrationThread = {
+      id: ThreadId.make("streaming-thread"),
+      projectId: ProjectId.make("project"),
+      title: "Long thread",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      pullRequests: [],
+      worktreePath: null,
+      latestTurn: {
+        ...initial.input.latestTurn,
+        requestedAt: initial.time(5),
+        assistantMessageId: liveMessage.id,
+      },
+      createdAt: initial.time(0),
+      updatedAt: initial.time(7),
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      deletedAt: null,
+      messages: [
+        ...history.flatMap(({ user, assistant }) => [user, assistant]),
+        ...initial.messages,
+      ],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: history.map(({ checkpoint }) => checkpoint),
+      session: null,
+    };
+    const state = Atom.make(
+      AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(thread) }),
+    );
+    const details = createEnvironmentThreadDetailAtoms(() => state);
+    const ref = { environmentId: EnvironmentId.make("local"), threadId: thread.id };
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(details.detailAtom(ref));
+    const preview = createMessageAttachmentPreviewProjector();
+    let imageUrl = "https://first.test/image";
+    let timeline: TimelineEntriesProjection | null = null;
+    let projection: MessagesTimelineRowsProjection | null = null;
+    const project = () => {
+      const selected = registry.get(details.detailAtom(ref));
+      if (selected === null) throw new Error("Missing thread detail");
+      const messages = selected.messages.map((message) => preview(message, () => imageUrl));
+      timeline = deriveTimelineEntriesWithState(
+        messages,
+        selected.proposedPlans,
+        initial.work,
+        timeline,
+      );
+      projection = deriveMessagesTimelineRowsWithState(
+        {
+          timelineEntries: timeline.entries,
+          latestTurn: selected.latestTurn,
+          runningTurnId:
+            selected.latestTurn?.state === "running" ? selected.latestTurn.turnId : null,
+          isWorking: selected.latestTurn?.state === "running",
+          activeTurnStartedAt: selected.latestTurn?.startedAt ?? null,
+          turnDiffSummaries: selected.checkpoints,
+          supportsConversationRollback: true,
+        },
+        projection,
+      );
+      return projection;
+    };
+    const send = (text: string, sequence: number, streaming = true) => {
+      const result = applyThreadDetailEvent(thread, {
+        eventId: EventId.make(`delta-${sequence}`),
+        sequence,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        occurredAt: initial.time(8 + sequence),
+        aggregateKind: "thread",
+        aggregateId: thread.id,
+        type: "thread.message-sent",
+        payload: {
+          threadId: thread.id,
+          messageId: liveMessage.id,
+          role: "assistant",
+          text,
+          turnId: initial.turnId,
+          streaming,
+          createdAt: liveMessage.createdAt,
+          updatedAt: initial.time(8 + sequence),
+        },
+      });
+      if (result.kind !== "updated") throw new Error("Message event did not update the thread");
+      thread = result.thread;
+      registry.set(
+        state,
+        AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(thread) }),
+      );
+      return project();
+    };
+
+    try {
+      const first = project();
+      const saved = structuredClone(first.rows);
+      expect(checkpointLookupReads).toBeGreaterThan(0);
+      checkpointLookupReads = 0;
+      for (let index = 0; index < 10; index += 1) {
+        const next = send(` ${index}`, index + 1);
+        for (const [rowIndex, row] of first.rows.entries()) {
+          if (
+            (row.kind === "message" || row.kind === "assistant-meta") &&
+            row.message.id === liveMessage.id
+          )
+            continue;
+          expect(next.rows[rowIndex]).toBe(row);
+        }
+      }
+      expect(checkpointLookupReads).toBe(0);
+      const streamed = project();
+      expect(streamed.rows).toEqual(deriveMessagesTimelineRows(streamed.input));
+
+      imageUrl = "https://renewed.test/image";
+      const renewed = project();
+      expect(renewed.rows[0]).not.toBe(first.rows[0]);
+      expect(renewed.rows[0]).toMatchObject({
+        message: { attachments: [{ previewUrl: imageUrl }] },
+      });
+      const completed = send("Complete", 11, false);
+      expect(completed.rows).toEqual(deriveMessagesTimelineRows(completed.input));
+      expect(
+        completed.rows.find((row) => row.kind === "message" && row.message.id === liveMessage.id),
+      ).toMatchObject({ message: { text: "Complete" }, assistantCopyStreaming: false });
+      expect(first.rows).toEqual(saved);
+    } finally {
+      unmount();
+      registry.dispose();
+    }
+  });
+
+  it.each(["completion", "turn", "role", "ordering"] as const)(
+    "rebuilds row structure for a %s change with otherwise unchanged controls",
+    (change) => {
+      const initial = fixture("Partial");
+      const input = {
+        ...initial.input,
+        latestTurn: {
+          ...initial.input.latestTurn,
+          state: "completed" as const,
+          completedAt: initial.time(9),
+        },
+        runningTurnId: null,
+        isWorking: false,
+      };
+      const previous = deriveMessagesTimelineRowsWithState(input);
+      const last = initial.messages.at(-1)!;
+      const changed: ChatMessage =
+        change === "completion"
+          ? { ...last, streaming: false, updatedAt: initial.time(10) }
+          : change === "turn"
+            ? { ...last, turnId: initial.historyTurnId }
+            : change === "role"
+              ? { ...last, role: "user", turnId: null }
+              : { ...last, createdAt: initial.time(0) };
+      const messages = [...initial.messages.slice(0, -1), changed];
+      const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+      const nextInput = { ...input, timelineEntries: timeline.entries };
+      const next = deriveMessagesTimelineRowsWithState(nextInput, previous);
+      expect(next.rows).toEqual(
+        deriveMessagesTimelineRows({
+          ...nextInput,
+          timelineEntries: deriveTimelineEntries(messages, [], initial.work),
+        }),
+      );
+      expect(previous.rows).toEqual(deriveMessagesTimelineRows(input));
+    },
+  );
+
+  it("keeps full parity through completion, trailing failure, metadata, expansion, and paging", () => {
+    const initial = fixture("Partial");
+    let timeline = initial.timeline;
+    let input: Parameters<typeof deriveMessagesTimelineRows>[0] = initial.input;
+    let projection = deriveMessagesTimelineRowsWithState(input);
+    let messages = initial.messages;
+    let work = initial.work;
+    const check = (changes: Partial<typeof input> = {}) => {
+      const oldRows = structuredClone(projection.rows);
+      const previous = projection;
+      timeline = deriveTimelineEntriesWithState(messages, [], work, timeline);
+      input = { ...input, ...changes, timelineEntries: timeline.entries };
+      projection = deriveMessagesTimelineRowsWithState(input, previous);
+      expect(projection.rows).toEqual(
+        deriveMessagesTimelineRows({
+          ...input,
+          timelineEntries: deriveTimelineEntries(messages, [], work),
+        }),
+      );
+      expect(previous.rows).toEqual(oldRows);
+    };
+
+    messages = [
+      ...messages.slice(0, -1),
+      { ...messages.at(-1)!, streaming: false, text: "Complete", updatedAt: initial.time(9) },
+    ];
+    check({
+      latestTurn: { ...initial.input.latestTurn, state: "completed", completedAt: initial.time(9) },
+      runningTurnId: null,
+      isWorking: false,
+    });
+    work = [
+      ...work,
+      {
+        id: "late-failure",
+        turnId: initial.turnId,
+        createdAt: initial.time(10),
+        label: "Failed command",
+        command: "vp test",
+        tone: "error",
+        toolCallId: "failed-tool",
+        toolLifecycleStatus: "failed",
+        sourceActivityKind: "tool.completed",
+      },
+    ];
+    check();
+    messages = [
+      ...messages.slice(0, -1),
+      { ...messages.at(-1)!, text: "Updated final text", updatedAt: initial.time(11) },
+    ];
+    check();
+    check({
+      latestTurn: {
+        ...initial.input.latestTurn,
+        state: "interrupted",
+        completedAt: initial.time(12),
+      },
+    });
+    check({ expandedTurnIds: new Set([initial.historyTurnId, initial.turnId]) });
+    const group = projection.rows.find((row) => row.kind === "work-toggle");
+    check({ expandedWorkGroupIds: new Set(group ? [group.id] : []) });
+    messages = [
+      { ...messages[0]!, id: MessageId.make("older-user"), createdAt: "2026-09-03T23:59:00.000Z" },
+      ...messages,
+    ];
+    check();
+    messages = messages.map((message) =>
+      message.id === MessageId.make("live-assistant")
+        ? { ...message, role: "user", turnId: null, createdAt: initial.time(0) }
+        : message,
+    );
+    check({ supportsConversationRollback: true });
+  });
+});
 
 describe("expanded tool group scrolling", () => {
   const entries = [{ id: "first" }, { id: "second" }];
@@ -177,8 +797,8 @@ describe("work entry labels", () => {
         ],
         isWorking: false,
         activeTurnStartedAt: null,
-        turnDiffSummaryByAssistantMessageId: new Map(),
-        revertTurnCountByUserMessageId: new Map(),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
       });
       const directRow = rows.find((row) => row.kind === "work");
       expect(directRow).toMatchObject({
@@ -472,6 +1092,82 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  it("shows the worktree setup card instead of the working placeholder", () => {
+    const snapshot: WorktreeSetupSnapshot = {
+      threadId: ThreadId.make("thread-setup"),
+      phase: "running",
+      startedAt: "2026-01-01T00:00:00Z",
+      endedAt: null,
+      branch: "feature",
+      baseRef: "main",
+      worktreePath: null,
+      setupScript: null,
+      stages: [],
+      error: null,
+      sequence: 3,
+    };
+    const userEntry = {
+      id: "user-entry",
+      kind: "message",
+      createdAt: "2026-01-01T00:00:00Z",
+      message: {
+        id: "user-1" as never,
+        role: "user",
+        text: "Build it",
+        turnId: null,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+        streaming: false,
+      },
+    } as const;
+    const assistantEntry = {
+      id: "assistant-entry",
+      kind: "message",
+      createdAt: "2026-01-01T00:00:30Z",
+      message: {
+        id: "assistant-1" as never,
+        role: "assistant",
+        text: "On it",
+        turnId: "turn-1" as never,
+        createdAt: "2026-01-01T00:00:30Z",
+        updatedAt: "2026-01-01T00:00:30Z",
+        streaming: true,
+      },
+    } as const;
+    const withoutMessages = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      worktreeSetup: snapshot,
+    });
+    expect(withoutMessages).toEqual([
+      {
+        kind: "worktree-setup",
+        id: WORKTREE_SETUP_ROW_ID,
+        createdAt: "2026-01-01T00:00:00Z",
+        snapshot,
+      },
+    ]);
+
+    // Once the agent has replied the finished card stays under the send.
+    const withMessages = deriveMessagesTimelineRows({
+      timelineEntries: [userEntry, assistantEntry],
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      worktreeSetup: { ...snapshot, phase: "done" },
+    });
+    expect(withMessages.map((row) => row.kind)).toEqual([
+      "message",
+      "worktree-setup",
+      "working",
+      "message",
+    ]);
+  });
+
   it("keeps context compaction visible outside folded work", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -490,8 +1186,8 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows).toEqual([
@@ -501,6 +1197,134 @@ describe("deriveMessagesTimelineRows", () => {
         createdAt: "2026-01-01T00:00:00Z",
         label: "Compacted context 899K → 19K tokens",
       },
+    ]);
+  });
+
+  it("keeps subagent spawn rows outside turn folds even after they settle", () => {
+    const firstMessage: ChatMessage = {
+      id: MessageId.make("assistant-first-entry"),
+      role: "assistant",
+      text: "Fanning out.",
+      turnId: TurnId.make("turn-1"),
+      createdAt: "2026-01-01T00:00:01Z",
+      updatedAt: "2026-01-01T00:00:02Z",
+      streaming: false,
+    };
+    const entriesWith = (agentSpawn: { workflowId: string | null; agentTaskIds: string[] }) =>
+      deriveTimelineEntries(
+        [
+          firstMessage,
+          {
+            ...firstMessage,
+            id: MessageId.make("assistant-final-entry"),
+            text: "Done.",
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+          },
+        ],
+        [],
+        [
+          {
+            id: "spawn-entry",
+            createdAt: "2026-01-01T00:00:03Z",
+            turnId: firstMessage.turnId,
+            label: "Ran 2 subagents",
+            tone: "tool",
+            agentSpawn,
+          },
+        ],
+      );
+    const direct = entriesWith({ workflowId: null, agentTaskIds: ["agent-a", "agent-b"] });
+    const workflow = entriesWith({ workflowId: "wf-1", agentTaskIds: ["wf-1", "agent-a"] });
+    const derive = (
+      timelineEntries: typeof direct,
+      liveAgentTaskIds: ReadonlySet<string> | undefined,
+      expandedTurnIds?: ReadonlySet<TurnId>,
+    ) =>
+      deriveMessagesTimelineRows({
+        timelineEntries,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        liveAgentTaskIds,
+        ...(expandedTurnIds ? { expandedTurnIds } : {}),
+      }).map((row) => row.id);
+    const unfolded = ["turn-fold:turn-1", "spawn-entry", "assistant-final-entry"];
+
+    const activeRows = (
+      timelineEntries: typeof direct,
+      liveAgentTaskIds: ReadonlySet<string>,
+      runningTurnId = "turn-1",
+    ) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: timelineEntries.slice(0, 2),
+        isWorking: true,
+        runningTurnId: runningTurnId as TurnId,
+        activeTurnStartedAt: "2026-01-01T00:00:00Z",
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        liveAgentTaskIds,
+      }).map((row) => row.kind);
+    expect(activeRows(direct, new Set(["agent-b"]))).not.toContain("thinking");
+    expect(activeRows(workflow, new Set(["wf-1"]))).not.toContain("thinking");
+    expect(activeRows(direct, new Set())).toContain("thinking");
+    expect(activeRows(direct, new Set(["agent-b"]), "turn-2")).toContain("thinking");
+
+    for (const [toolLifecycleStatus, tone, sourceActivityKind] of [
+      ["inProgress", "tool", "tool.updated"],
+      ["completed", "tool", "tool.completed"],
+      // Claude background Bash completions arrive without a command or item type.
+      ["completed", "info", "task.completed"],
+    ] as const) {
+      const laterTool = {
+        id: "later-tool",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:04Z",
+        entry: {
+          id: "later-tool",
+          turnId: "turn-1" as TurnId,
+          createdAt: "2026-01-01T00:00:04Z",
+          label: "Read file",
+          tone,
+          sourceActivityKind,
+          toolLifecycleStatus,
+        },
+      };
+      for (const trailingEntries of [[], [laterTool]]) {
+        const rows = deriveMessagesTimelineRows({
+          timelineEntries: [...direct.slice(0, 2), ...trailingEntries],
+          isWorking: true,
+          runningTurnId: "turn-1" as TurnId,
+          activeTurnStartedAt: "2026-01-01T00:00:00Z",
+          turnDiffSummaries: [],
+          supportsConversationRollback: false,
+          liveAgentTaskIds: new Set(["agent-b"]),
+        });
+        expect(rows.filter((row) => row.kind === "work-live")).toMatchObject([
+          {
+            id: "live-activity-row",
+            entry: { id: trailingEntries.length ? "later-tool" : "spawn-entry" },
+            active: true,
+          },
+        ]);
+        expect(rows.some((row) => row.kind === "work" || row.kind === "thinking")).toBe(false);
+      }
+    }
+
+    expect(derive(direct, new Set())).toEqual(unfolded);
+    expect(derive(direct, new Set(["agent-b"]))).toEqual(unfolded);
+    // A workflow coordinator between phases keeps its batch out of the fold.
+    expect(derive(workflow, new Set(["wf-1"]))).toEqual(unfolded);
+    expect(derive(workflow, new Set())).toEqual(unfolded);
+    // No live set is known.
+    expect(derive(direct, undefined)).toEqual(unfolded);
+    // Expanding the turn reveals the other work without duplicating the batch.
+    expect(derive(direct, new Set(), new Set(["turn-1" as TurnId]))).toEqual([
+      "turn-fold:turn-1",
+      "assistant-first-entry",
+      "spawn-entry",
+      "assistant-final-entry",
     ]);
   });
 
@@ -553,8 +1377,8 @@ describe("deriveMessagesTimelineRows", () => {
       expandedTurnIds: new Set(["turn-1" as never]),
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const assistantRows = rows.filter(
@@ -607,8 +1431,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const assistantRows = rows.filter(
@@ -664,10 +1488,8 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map([
-        ["assistant-1" as never, assistantTurnDiffSummary],
-      ]),
-      revertTurnCountByUserMessageId: new Map([["user-1" as never, 1]]),
+      turnDiffSummaries: [assistantTurnDiffSummary],
+      supportsConversationRollback: true,
     });
 
     const userRow = rows.find(
@@ -745,8 +1567,8 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries,
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const foldRow = collapsedRows.find(
@@ -768,8 +1590,8 @@ describe("deriveMessagesTimelineRows", () => {
       expandedTurnIds: new Set(["turn-1" as never]),
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(expandedRows.map((row) => row.id)).toEqual([
@@ -829,19 +1651,19 @@ describe("deriveMessagesTimelineRows", () => {
       })),
     ];
 
-    const rows = deriveMessagesTimelineRows({
-      timelineEntries,
+    const input = {
       latestTurn: {
         turnId,
-        state: "error",
+        state: "error" as const,
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: "2026-01-01T00:00:10Z",
       },
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
-    });
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    };
+    const rows = deriveMessagesTimelineRows({ ...input, timelineEntries });
 
     expect(rows.map((row) => row.id)).toEqual([
       "turn-fold:turn-1",
@@ -864,6 +1686,11 @@ describe("deriveMessagesTimelineRows", () => {
       showAssistantMeta: false,
       showAssistantCopyButton: false,
     });
+    expect(
+      deriveMessagesTimelineRows({ ...input, timelineEntries: timelineEntries.slice(0, 3) }).map(
+        (row) => row.id,
+      ),
+    ).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
   });
 
   it("folds all assistant messages before the terminal message", () => {
@@ -916,8 +1743,8 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries,
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.id)).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
@@ -1019,8 +1846,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:14Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const foldRow = rows.find(
@@ -1056,8 +1883,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows).toEqual([
@@ -1124,8 +1951,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:01:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.id)).toEqual([
@@ -1178,8 +2005,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.some((row) => row.kind === "turn-fold")).toBe(false);
@@ -1272,8 +2099,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:01:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.some((row) => row.kind === "turn-fold")).toBe(false);
@@ -1352,8 +2179,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.kind)).toEqual(["working", "work-live"]);
@@ -1425,8 +2252,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.kind)).toEqual(["working", "work", "message", "work-live"]);
@@ -1477,8 +2304,8 @@ describe("deriveMessagesTimelineRows", () => {
       expandedTurnIds: new Set([turnId]),
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.find((row) => row.kind === "work")).toMatchObject({
@@ -1545,8 +2372,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.kind)).toEqual(["working", "work-live", "message", "work-live"]);
@@ -1592,8 +2419,8 @@ describe("deriveMessagesTimelineRows", () => {
       latestTurn: null,
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:01:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.some((row) => row.kind === "work-live")).toBe(false);
@@ -1653,8 +2480,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.filter((row) => row.kind === "work-live").map((row) => row.entry.id)).toEqual([
@@ -1665,7 +2492,7 @@ describe("deriveMessagesTimelineRows", () => {
   it.each([
     [undefined, true],
     ["inProgress", true],
-    ["completed", false],
+    ["completed", true],
     ["failed", null],
     ["declined", false],
     ["stopped", false],
@@ -1698,8 +2525,8 @@ describe("deriveMessagesTimelineRows", () => {
         },
         isWorking: true,
         activeTurnStartedAt: "2026-01-01T00:00:00Z",
-        turnDiffSummaryByAssistantMessageId: new Map(),
-        revertTurnCountByUserMessageId: new Map(),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
       });
 
       const workLiveRow = rows.find((row) => row.kind === "work-live");
@@ -1708,6 +2535,7 @@ describe("deriveMessagesTimelineRows", () => {
         expect(rows.at(-1)).toMatchObject({ kind: "thinking", id: "live-activity-row" });
       } else {
         expect(workLiveRow).toMatchObject({ active });
+        if (active) expect(rows.some((row) => row.kind === "thinking")).toBe(false);
       }
     },
   );
@@ -1746,8 +2574,8 @@ describe("deriveMessagesTimelineRows", () => {
         },
         isWorking: true,
         activeTurnStartedAt: "2026-01-01T00:00:00Z",
-        turnDiffSummaryByAssistantMessageId: new Map(),
-        revertTurnCountByUserMessageId: new Map(),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
       });
 
     const initialRows = deriveRows(null);
@@ -1824,8 +2652,8 @@ describe("deriveMessagesTimelineRows", () => {
       runningTurnId: "turn-2" as never,
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:01:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.filter((row) => row.kind === "turn-fold").map((row) => row.turnId)).toEqual([
@@ -1869,8 +2697,8 @@ describe("deriveMessagesTimelineRows", () => {
       expandedTurnIds: new Set(["turn-1" as never]),
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const assistantRows = rows.filter(
@@ -1907,8 +2735,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const assistantRow = rows.find(
@@ -1971,8 +2799,8 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries,
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     };
     const collapsedRows = deriveMessagesTimelineRows(baseInput);
     const expandedRows = deriveMessagesTimelineRows({
@@ -1999,6 +2827,84 @@ describe("deriveMessagesTimelineRows", () => {
     });
     expect(expandedRows.find((row) => row.kind === "work-toggle")).toMatchObject({
       expanded: true,
+    });
+  });
+
+  it("keeps user input in its own row through tool grouping and turn folding", () => {
+    const turnId = TurnId.make("answer-turn");
+    const time = (second: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, second)).toISOString();
+    const answer: WorkLogEntry = {
+      id: "answer-submitted",
+      createdAt: time(3),
+      turnId,
+      tone: "info",
+      label: "User input submitted",
+      sourceActivityKind: "user-input.answer-submitted",
+      questionAnswer: {
+        requestId: ApprovalRequestId.make("answer-request"),
+        answers: { scope: "Use the private repository" },
+        questionTextById: { scope: "Which repository?" },
+        attachmentsByQuestionId: {},
+      },
+    };
+    const tools: WorkLogEntry[] = [1, 2, 4, 5].map((second) => ({
+      id: `tool-${second}`,
+      createdAt: time(second),
+      turnId,
+      tone: "tool",
+      label: "Ran command",
+      command: "git status",
+      toolCallId: `call-${second}`,
+      toolLifecycleStatus: "completed",
+      sourceActivityKind: "tool.completed",
+    }));
+    const input = {
+      timelineEntries: deriveTimelineEntries([], [], [...tools, answer]),
+      latestTurn: { turnId, state: "completed", startedAt: time(0), completedAt: time(6) },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    } satisfies Parameters<typeof deriveMessagesTimelineRows>[0];
+    const collapsed = deriveMessagesTimelineRows(input);
+    expect(collapsed.map((row) => row.kind)).toEqual(["turn-fold", "work"]);
+    const expanded = deriveMessagesTimelineRows({ ...input, expandedTurnIds: new Set([turnId]) });
+    expect(expanded.map((row) => row.kind)).toEqual([
+      "turn-fold",
+      "work-toggle",
+      "work",
+      "work-toggle",
+    ]);
+    const expandedGroups = deriveMessagesTimelineRows({
+      ...input,
+      expandedTurnIds: new Set([turnId]),
+      expandedWorkGroupIds: new Set(
+        expanded.flatMap((row) => (row.kind === "work-toggle" ? [row.groupId] : [])),
+      ),
+    });
+    expect(
+      expandedGroups.flatMap((row) =>
+        row.kind === "work" && row.isExpandedToolGroup ? [row.groupedEntries] : [],
+      ),
+    ).toEqual([tools.slice(0, 2), tools.slice(2)]);
+    const active = deriveMessagesTimelineRows({
+      ...input,
+      latestTurn: { ...input.latestTurn, state: "running", completedAt: null },
+      runningTurnId: turnId,
+      isWorking: true,
+      activeTurnStartedAt: time(0),
+    });
+    for (const rows of [collapsed, expanded, expandedGroups, active]) {
+      const answerRows = rows.filter(
+        (row) =>
+          (row.kind === "work" || row.kind === "work-live") && row.groupedEntries.includes(answer),
+      );
+      expect(answerRows).toMatchObject([
+        { kind: "work", groupedEntries: [answer], isExpandedToolGroup: false },
+      ]);
+    }
+    expect(active.find((row) => row.kind === "work-live")).toMatchObject({
+      groupedEntries: tools.slice(2),
     });
   });
 
@@ -2065,8 +2971,8 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries,
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(row).toMatchObject({
@@ -2107,8 +3013,8 @@ describe("deriveMessagesTimelineRows", () => {
         expandedTurnIds: new Set([turnId]),
         runningTurnId: isWorking ? turnId : null,
         activeTurnStartedAt: isWorking ? createdAt : null,
-        turnDiffSummaryByAssistantMessageId: new Map(),
-        revertTurnCountByUserMessageId: new Map(),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
       };
       const expandedRows = deriveMessagesTimelineRows({
         ...input,
@@ -2147,8 +3053,8 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries,
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.find((row) => row.kind === "work-toggle")).toMatchObject({
@@ -2194,8 +3100,8 @@ describe("deriveMessagesTimelineRows", () => {
         timelineEntries,
         isWorking: false,
         activeTurnStartedAt: null,
-        turnDiffSummaryByAssistantMessageId: new Map(),
-        revertTurnCountByUserMessageId: new Map(),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
       });
 
       expect(rows.find((row) => row.kind === "work-toggle")).toMatchObject({
@@ -2251,8 +3157,8 @@ describe("computeStableMessagesTimelineRows", () => {
       runningTurnId: turnId,
       isWorking: true,
       activeTurnStartedAt: startedAt,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     };
     const assistantEntry = {
       id: "assistant-entry",
@@ -2329,8 +3235,8 @@ describe("computeStableMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const initial = computeStableMessagesTimelineRows(rows, {
@@ -2378,8 +3284,8 @@ describe("computeStableMessagesTimelineRows", () => {
         ],
         isWorking: false,
         activeTurnStartedAt: null,
-        turnDiffSummaryByAssistantMessageId: new Map(),
-        revertTurnCountByUserMessageId: new Map(),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
       });
 
     const firstRows = createRows();
@@ -2434,8 +3340,8 @@ describe("computeStableMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     const initial = computeStableMessagesTimelineRows(firstRows, {

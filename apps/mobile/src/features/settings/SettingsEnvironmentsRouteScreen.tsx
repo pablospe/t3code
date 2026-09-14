@@ -10,6 +10,7 @@ import { AppText as Text } from "../../components/AppText";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { CloudEnvironmentRows } from "../connection/CloudEnvironmentRows";
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
+import { GitHubRoutingSettings } from "../connection/GitHubRoutingSettings";
 import { splitEnvironmentSections } from "../connection/environmentSections";
 import { cn } from "../../lib/cn";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -28,6 +29,7 @@ export function SettingsEnvironmentsRouteScreen() {
     connectedEnvironments,
     onReconnectEnvironment,
     onRemoveEnvironmentPress,
+    onSetEnvironmentEnabled,
     onUpdateEnvironment,
   } = useRemoteConnections();
   const navigation = useNavigation();
@@ -136,13 +138,8 @@ export function SettingsEnvironmentsRouteScreen() {
                   onToggle={() => handleToggle(environment.environmentId)}
                   onReconnect={onReconnectEnvironment}
                   onRemove={onRemoveEnvironmentPress}
+                  onSetEnabled={onSetEnvironmentEnabled}
                   onUpdate={handleUpdateEnvironment}
-                  onSetupProvider={(params) =>
-                    navigation.navigate("SettingsSheet", {
-                      screen: "SettingsContent",
-                      params: { screen: "SettingsProviderSetup", params },
-                    })
-                  }
                 />
               </View>
             ))}
@@ -169,13 +166,8 @@ export function SettingsEnvironmentsRouteScreen() {
             user is signed out — the component gates discovery itself. */}
         <CloudEnvironmentRows
           connectedCloudEnvironments={connectedCloudEnvironments}
-          onReconnectEnvironment={onReconnectEnvironment}
-          onSetupProvider={(params) =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsProviderSetup", params },
-            })
-          }
+          onSetEnvironmentEnabled={onSetEnvironmentEnabled}
+          onRemoveEnvironment={onRemoveEnvironmentPress}
           {...(SHOWCASE_ENABLED
             ? {
                 showcaseAvailableEnvironments: SHOWCASE_AVAILABLE_CLOUD_ENVIRONMENTS,
@@ -183,6 +175,7 @@ export function SettingsEnvironmentsRouteScreen() {
               }
             : {})}
         />
+        <GitHubRoutingSettings />
       </ScrollView>
     </View>
   );

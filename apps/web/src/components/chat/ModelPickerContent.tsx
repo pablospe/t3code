@@ -5,6 +5,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
+import { useAtomValue } from "@effect/atom-react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { ChevronRightIcon, SearchIcon } from "lucide-react";
@@ -26,6 +27,8 @@ import {
   ComboboxListVirtualized,
 } from "../ui/combobox";
 import { ModelEsque } from "./providerIconUtils";
+import { isCommandPaletteOpen } from "../../commandPaletteBus";
+import { primaryServerKeybindingsAtom } from "../../state/server";
 import {
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
@@ -108,6 +111,34 @@ export function shouldOfferModelPickerSetup(
       entry.snapshot.auth.status === "unauthenticated" ||
       !options.some((option) => !option.isUnavailable))
   );
+}
+
+export function adjacentModelPickerProvider(input: {
+  entries: ReadonlyArray<ProviderInstanceEntry>;
+  selectedInstanceId: ProviderInstanceId | "favorites";
+  direction: 1 | -1;
+  disabledInstanceIds: ReadonlySet<ProviderInstanceId> | undefined;
+  selectableUnavailableInstanceIds: ReadonlySet<ProviderInstanceId> | undefined;
+}) {
+  const providers: Array<ProviderInstanceId | "favorites"> = [
+    "favorites",
+    ...input.entries
+      .filter(
+        (entry) =>
+          !input.disabledInstanceIds?.has(entry.instanceId) &&
+          (isProviderInstancePickerReady(entry) ||
+            input.selectableUnavailableInstanceIds?.has(entry.instanceId)),
+      )
+      .map((entry) => entry.instanceId),
+  ];
+  const index = providers.indexOf(input.selectedInstanceId);
+  return providers[
+    index < 0
+      ? input.direction === 1
+        ? 0
+        : providers.length - 1
+      : (index + input.direction + providers.length) % providers.length
+  ]!;
 }
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
@@ -217,10 +248,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           : [],
       ),
   );
-  const keybindings = useMemo<ResolvedKeybindingsConfig>(
-    () => providedKeybindings ?? [],
-    [providedKeybindings],
-  );
+  const serverKeybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const keybindings = providedKeybindings ?? serverKeybindings;
   const updateSettings = useUpdateClientSettings();
 
   const focusSearchInput = useCallback(() => {
@@ -678,7 +707,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   useEffect(() => {
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat) {
+      if (event.defaultPrevented || event.repeat || isCommandPaletteOpen()) {
         return;
       }
 
@@ -686,10 +715,26 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         platform: navigator.platform,
         context: modelJumpShortcutContext,
       });
+      if (command === "modelPicker.previousProvider" || command === "modelPicker.nextProvider") {
+        event.preventDefault();
+        event.stopPropagation();
+        const next = adjacentModelPickerProvider({
+          entries: sidebarInstanceEntries,
+          selectedInstanceId,
+          direction: command === "modelPicker.nextProvider" ? 1 : -1,
+          disabledInstanceIds: lockedDisabledInstanceIds,
+          selectableUnavailableInstanceIds,
+        });
+        setSearchQuery("");
+        handleSelectInstance(next);
+        return;
+      }
       const jumpIndex = modelPickerJumpIndexFromCommand(command ?? "");
       if (jumpIndex === null) {
         return;
       }
+      event.preventDefault();
+      event.stopPropagation();
 
       const targetModelKey = modelJumpModelKeys[jumpIndex];
       if (!targetModelKey) {
@@ -699,8 +744,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       if (!model) {
         return;
       }
-      event.preventDefault();
-      event.stopPropagation();
       handleModelSelect(model.slug, model.instanceId);
     };
 
@@ -709,7 +752,17 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, true);
     };
-  }, [handleModelSelect, keybindings, modelJumpModelKeys, modelJumpShortcutContext]);
+  }, [
+    handleModelSelect,
+    handleSelectInstance,
+    keybindings,
+    lockedDisabledInstanceIds,
+    modelJumpModelKeys,
+    modelJumpShortcutContext,
+    selectableUnavailableInstanceIds,
+    selectedInstanceId,
+    sidebarInstanceEntries,
+  ]);
 
   useLayoutEffect(() => {
     setShowTopScrollFade(false);
@@ -736,6 +789,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           <ModelPickerSidebar
             selectedInstanceId={selectedInstanceId}
             onSelectInstance={handleSelectInstance}
+            onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
             showFavorites
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
@@ -804,6 +858,28 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => {
+                    if (
+                      showSidebar &&
+                      !e.altKey &&
+                      !e.ctrlKey &&
+                      !e.metaKey &&
+                      ((e.key === "ArrowLeft" && !e.shiftKey && searchQuery.length === 0) ||
+                        (e.key === "Tab" && e.shiftKey))
+                    ) {
+                      const sidebar = e.currentTarget
+                        .closest("[data-model-picker-content]")
+                        ?.querySelector("[data-model-picker-sidebar]");
+                      const button =
+                        sidebar?.querySelector<HTMLButtonElement>(
+                          'button[aria-pressed="true"]:not(:disabled)',
+                        ) ?? sidebar?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+                      if (button) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        button.focus();
+                        return;
+                      }
+                    }
                     if (e.key === "Escape") {
                       e.preventDefault();
                       e.stopPropagation();

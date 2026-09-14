@@ -15,7 +15,11 @@
 import * as NodeOS from "node:os";
 
 import {
+  ClaudeSettings,
+  CodexSettings,
+  type ProviderInstanceConfig,
   USAGE_CONTRACT_VERSION,
+  type ServerSettings as ServerSettingsValue,
   type UsageProviderKind,
   type UsageSource,
   type UsagePricing,
@@ -41,10 +45,10 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerConfig } from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
-import { parseRateTable, type RateTable } from "./usagePricing.ts";
+import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -77,6 +81,9 @@ const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** Longest window the UI offers, plus slack. Older entries are pruned. */
 const CACHE_RETENTION_DAYS = 90;
+
+const decodeCodexSettings = Schema.decodeOption(CodexSettings);
+const decodeClaudeSettings = Schema.decodeOption(ClaudeSettings);
 
 /** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
@@ -219,57 +226,71 @@ export const make = Effect.gen(function* () {
     Effect.withSpan("UsageService.refreshRates"),
   );
 
-  /**
-   * Claude's config dir is the home itself when overridden, but a default
-   * install nests transcripts under `~/.claude/projects`. Probe both.
-   */
-  const resolveClaudeTranscriptDir = (homePath: string) =>
-    Effect.gen(function* () {
-      const nested = path.join(homePath, ".claude", "projects");
-      const nestedExists = yield* fileSystem
-        .exists(nested)
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
-      return nestedExists ? nested : path.join(homePath, "projects");
-    });
+  // A settings failure must not silently discard custom rates or transcript homes.
+  const readSettings = settingsService.getSettings.pipe(
+    Effect.catchCause(
+      (cause) =>
+        new UsageReadError({
+          reason: "scanFailed",
+          detail: "Server settings could not be read.",
+          cause: Cause.squash(cause),
+        }),
+    ),
+  );
 
   /** Resolves the transcript directory for each provider. */
-  const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
-    // A settings failure must surface as an error: swallowing it here would
-    // present "zero usage from every provider" as a valid answer.
-    const settings = yield* settingsService.getSettings.pipe(
-      Effect.catchCause(
-        (cause) =>
-          new UsageReadError({
-            reason: "scanFailed",
-            // Bounded description; the squashed failure travels as the cause.
-            // Squashed, not the Cause tree: a full tree in a Defect field is
-            // the unbounded wire payload the bounded detail exists to avoid.
-            detail: "Server settings could not be read.",
-            cause: Cause.squash(cause),
-          }),
-      ),
-    );
-
-    const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
-    const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
-    const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
-    // Grok Settings only expose the binary path; home is `$GROK_HOME` or `~/.grok`.
-    // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
-    const grokHomeEnv = hostEnvironment["GROK_HOME"]?.trim() ?? "";
-    const grokHome =
-      grokHomeEnv.length > 0
-        ? path.resolve(expandHomePath(grokHomeEnv))
-        : path.join(NodeOS.homedir(), ".grok");
-
-    return [
-      { provider: "claude" as const, dir: claudeDir },
-      { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
-      {
-        provider: "grok" as const,
-        dir: path.join(grokHome, "sessions"),
-        fileName: "updates.jsonl",
-      },
-    ];
+  const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
+    settings: ServerSettingsValue,
+  ) {
+    const dirs: Array<{ provider: UsageProviderKind; dir: string; fileName?: string }> = [];
+    const seen = new Set<string>();
+    for (const driver of ["claudeAgent", "codex", "grok"] as const) {
+      // Disabled accounts still have history. Explicit default slots replace
+      // the legacy settings, just as they do in the provider registry.
+      const instances: Array<Pick<ProviderInstanceConfig, "config" | "environment">> =
+        Object.values(settings.providerInstances).filter((instance) => instance.driver === driver);
+      if (!Object.hasOwn(settings.providerInstances, driver)) {
+        instances.push({ config: settings.providers[driver] });
+      }
+      for (const instance of instances) {
+        const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
+        const provider = driver === "claudeAgent" ? "claude" : driver;
+        let home: string;
+        if (driver === "codex") {
+          const decoded = decodeCodexSettings(instance.config ?? {});
+          if (Option.isNone(decoded)) continue;
+          const config = decoded.value;
+          const environmentHome = environment.CODEX_HOME?.trim();
+          const layout = yield* resolveCodexHomeLayout(
+            !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome
+              ? { ...config, homePath: environmentHome }
+              : config,
+          );
+          home = layout.sharedHomePath;
+        } else if (driver === "claudeAgent") {
+          const decoded = decodeClaudeSettings(instance.config ?? {});
+          if (Option.isNone(decoded)) continue;
+          const configured = decoded.value.homePath.trim();
+          home = configured
+            ? expandHomePath(configured)
+            : environment.CLAUDE_CONFIG_DIR?.trim() || path.join(NodeOS.homedir(), ".claude");
+        } else {
+          home = expandHomePath(
+            environment.GROK_HOME?.trim() || path.join(NodeOS.homedir(), ".grok"),
+          );
+        }
+        const directory = path.resolve(home, provider === "claude" ? "projects" : "sessions");
+        // Account aliases and Codex auth overlays can share the same history.
+        const dir = yield* fileSystem
+          .realPath(directory)
+          .pipe(Effect.orElseSucceed(() => directory));
+        const key = `${provider}\0${dir}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        dirs.push({ provider, dir, ...(provider === "grok" ? { fileName: "updates.jsonl" } : {}) });
+      }
+    }
+    return dirs;
   });
 
   /**
@@ -379,10 +400,15 @@ export const make = Effect.gen(function* () {
       | null;
   }
 
-  const collectDirs = Effect.fn("UsageService.collectDirs")(function* (windowStartMs: number) {
+  const collectDirs = Effect.fn("UsageService.collectDirs")(function* (
+    windowStartMs: number,
+    settings: ServerSettingsValue,
+  ) {
     // The home resolvers ask for `Path` themselves; satisfy them from the
     // instance we already hold so the scan stays context-free.
-    const dirs = yield* resolveTranscriptDirs().pipe(Effect.provideService(Path.Path, path));
+    const dirs = yield* resolveTranscriptDirs(settings).pipe(
+      Effect.provideService(Path.Path, path),
+    );
     const scanned: ScannedDir[] = [];
     for (const { provider, dir, fileName } of dirs) {
       const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
@@ -406,7 +432,10 @@ export const make = Effect.gen(function* () {
     return scanned;
   });
 
-  const scanSummary = Effect.fn("UsageService.scanSummary")(function* (input: UsageSummaryInput) {
+  const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
+    input: UsageSummaryInput,
+    settings: ServerSettingsValue,
+  ) {
     if (input.sinceDay > input.untilDay) {
       return yield* new UsageReadError({
         reason: "invalidWindow",
@@ -455,9 +484,10 @@ export const make = Effect.gen(function* () {
     // Pricing only matters once records are aggregated, so the rate table
     // loads while transcripts stream instead of gating them: a cold rates
     // fetch on a slow network no longer delays the scan by its own timeout.
-    const [, scannedDirs] = yield* Effect.all([ensureRates(false), collectDirs(windowStartMs)], {
-      concurrency: 2,
-    });
+    const [, scannedDirs] = yield* Effect.all(
+      [ensureRates(false), collectDirs(windowStartMs, settings)],
+      { concurrency: 2 },
+    );
 
     const aggregator = new UsageAggregator({
       timeZone: input.timeZone,
@@ -466,6 +496,7 @@ export const make = Effect.gen(function* () {
       resolution: input.resolution ?? "day",
       ...hourlyWindow,
       rates,
+      priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
     });
 
     const sources: UsageSource[] = [];
@@ -547,13 +578,16 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * In-flight scans by window, so concurrent identical requests (the usage
+   * In-flight scans by window and custom prices, so concurrent identical requests (the usage
    * page open on two clients at once) share one scan instead of racing over
    * the same corpus twice.
    */
   const inflightScans = new Map<string, Deferred.Deferred<UsageSummary, UsageReadError>>();
 
-  const scanKey = (input: UsageSummaryInput): string =>
+  const scanKey = (
+    input: UsageSummaryInput,
+    priceOverrides: ServerSettingsValue["usagePriceOverrides"],
+  ): string =>
     JSON.stringify([
       input.timeZone,
       input.sinceDay,
@@ -561,10 +595,12 @@ export const make = Effect.gen(function* () {
       input.resolution ?? "day",
       input.sinceTime ?? null,
       input.untilTime ?? null,
+      priceOverrides,
     ]);
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
-    const key = scanKey(input);
+    const settings = yield* readSettings;
+    const key = scanKey(input, settings.usagePriceOverrides);
     const deferred = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const existing = inflightScans.get(key);
@@ -576,7 +612,7 @@ export const make = Effect.gen(function* () {
         inflightScans.set(key, created);
         // Detached so one departing client cannot tear the scan out from under
         // the fibers awaiting it; a finished scan warms the cache either way.
-        yield* scanSummary(input).pipe(
+        yield* scanSummary(input, settings).pipe(
           Effect.onExit((exit) =>
             Effect.sync(() => inflightScans.delete(key)).pipe(
               Effect.andThen(Deferred.done(created, exit)),
