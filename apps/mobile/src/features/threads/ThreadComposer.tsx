@@ -300,6 +300,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
   const showStopAction =
     !hasContent &&
+    // An attached session can only be stopped from the terminal that owns it.
+    !isAttachedSessionThreadId(props.selectedThread.id) &&
     (props.selectedThread.session?.status === "running" ||
       props.selectedThread.session?.status === "starting");
 
