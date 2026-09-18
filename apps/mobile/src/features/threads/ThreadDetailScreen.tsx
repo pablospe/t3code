@@ -14,6 +14,7 @@ import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSki
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useNavigation } from "@react-navigation/native";
+import { isAttachedSessionThreadId } from "@t3tools/contracts";
 import type {
   ApprovalRequestId,
   EnvironmentId,
@@ -1028,6 +1029,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       <PendingApprovalCard
                         approval={props.activePendingApproval}
                         respondingApprovalId={props.respondingApprovalId}
+                        readOnly={isAttachedSessionThreadId(props.selectedThread.id)}
                         onRespond={props.onRespondToApproval}
                       />
                     ) : null}
@@ -1083,7 +1085,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   // them against a thread id the server may still reject
                   // would strand them in the outbox.
                   sendBlockedReason={
-                    props.creationState?.kind === "preparing" ? "Starting the task…" : null
+                    isAttachedSessionThreadId(props.selectedThread.id)
+                      ? "Reply in the terminal that owns this session."
+                      : props.creationState?.kind === "preparing"
+                        ? "Starting the task…"
+                        : null
                   }
                   bottomInset={composerBottomInset}
                   onChangeDraftMessage={props.onChangeDraftMessage}

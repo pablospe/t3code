@@ -37,6 +37,7 @@ import type {
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  isAttachedSessionThreadId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -940,6 +941,7 @@ import {
   PencilRulerIcon,
   PlayIcon,
   ShieldIcon,
+  TerminalIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
@@ -1929,7 +1931,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderEntry?.snapshot,
     selectedModel,
   );
+  // Attached threads mirror a session that its terminal owns, so T3 never sends to them.
+  const isAttachedSession = activeThreadId !== null && isAttachedSessionThreadId(activeThreadId);
   const sendDisabledReason =
+    (isAttachedSession ? "Reply in the terminal that owns this session." : null) ??
     externalSendDisabledReason ??
     (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
     (activePendingProgress
@@ -4986,7 +4991,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const hiddenRestingBlockIds = restingBlockDefs
     .slice(restingBlockDefs.length - restingHiddenBlockCount)
     .map((def) => def.id);
-  const composerControls = showProviderUnavailable ? (
+  const composerControls = isAttachedSession ? (
+    <span
+      data-chat-attached-session="true"
+      className="flex shrink-0 items-center gap-2 px-2 text-sm text-secondary-label sm:px-3"
+    >
+      <TerminalIcon className="size-4" />
+      Read-only terminal session
+    </span>
+  ) : showProviderUnavailable ? (
     <ComposerControl
       type="button"
       disabled={!providerSetupInstanceId}
@@ -6218,16 +6231,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         pendingCount={pendingApprovals.length}
                       />
                     </ComposerBanner.Content>
-                    <ComposerBanner.Actions>
-                      <ComposerPendingApprovalActions
-                        requestId={activePendingApproval.requestId}
-                        isResponding={respondingRequestIds.includes(
-                          activePendingApproval.requestId,
-                        )}
-                        options={activePendingApproval.options}
-                        onRespondToApproval={onRespondToApproval}
-                      />
-                    </ComposerBanner.Actions>
+                    {isAttachedSession ? null : (
+                      <ComposerBanner.Actions>
+                        <ComposerPendingApprovalActions
+                          requestId={activePendingApproval.requestId}
+                          isResponding={respondingRequestIds.includes(
+                            activePendingApproval.requestId,
+                          )}
+                          options={activePendingApproval.options}
+                          onRespondToApproval={onRespondToApproval}
+                        />
+                      </ComposerBanner.Actions>
+                    )}
                   </ComposerBanner.Row>
                 ) : !isComposerCollapsedMobile && pendingUserInputs.length > 0 ? (
                   <ComposerPendingUserInputPanel

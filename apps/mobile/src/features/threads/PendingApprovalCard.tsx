@@ -12,6 +12,8 @@ import type { PendingApproval } from "../../lib/threadActivity";
 export interface PendingApprovalCardProps {
   readonly approval: PendingApproval;
   readonly respondingApprovalId: ApprovalRequestId | null;
+  /** The request can only be answered somewhere else, so no actions are offered. */
+  readonly readOnly?: boolean;
   readonly onRespond: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -47,7 +49,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         <Text className="font-sans text-xs leading-normal text-warning-foreground">{warning}</Text>
       ) : null}
       <View className="flex-row flex-wrap gap-2.5">
-        {options.map((option) => (
+        {(props.readOnly ? [] : options).map((option) => (
           <RequestActionButton
             key={option.decision}
             label={option.label}

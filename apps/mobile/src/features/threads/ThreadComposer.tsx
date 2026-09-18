@@ -6,6 +6,7 @@ import { pastedTextDisposition, replaceTextSelection } from "@t3tools/client-run
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  isAttachedSessionThreadId,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
@@ -668,7 +669,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             {selectedProviderStatus.compatibilityAdvisory.message}
           </Text>
         ) : null}
-        {modelUnavailable ? (
+        {isAttachedSessionThreadId(props.selectedThread.id) ? (
+          <Text className="px-3 py-2 text-xs text-foreground">Read-only terminal session.</Text>
+        ) : modelUnavailable ? (
           <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
             <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
           </Pressable>
