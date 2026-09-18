@@ -17,6 +17,13 @@ const ContentBlock = Schema.Struct({
   input: Schema.optional(Schema.Unknown),
   tool_use_id: Schema.optional(Schema.String),
   is_error: Schema.optional(Schema.Boolean),
+  source: Schema.optional(
+    Schema.Struct({
+      type: Schema.optional(Schema.String),
+      media_type: Schema.optional(Schema.String),
+      data: Schema.optional(Schema.String),
+    }),
+  ),
 });
 
 const TranscriptRecord = Schema.Struct({
@@ -39,12 +46,19 @@ const decodeTranscriptRecord = Schema.decodeUnknownOption(Schema.fromJsonString(
 
 const MAX_TOOL_DETAIL_CHARS = 400;
 
+/** An image pasted into the terminal prompt, still base64 encoded. */
+export interface AttachedTranscriptImage {
+  readonly mediaType: string;
+  readonly base64: string;
+}
+
 export type AttachedTranscriptEntry =
   | {
       readonly kind: "message";
       readonly role: "user" | "assistant";
       readonly uuid: string;
       readonly text: string;
+      readonly images: ReadonlyArray<AttachedTranscriptImage>;
       readonly createdAt: string;
     }
   | {
@@ -110,8 +124,19 @@ export function parseAttachedTranscriptLine(
     .flatMap((block) => (block.type === "text" && block.text !== undefined ? [block.text] : []))
     .join("\n")
     .trim();
-  if (text.length > 0) {
-    entries.push({ kind: "message", role, uuid, text, createdAt });
+  const images =
+    role === "user"
+      ? blocks.flatMap((block): ReadonlyArray<AttachedTranscriptImage> => {
+          const source = block.type === "image" ? block.source : undefined;
+          return source?.type === "base64" &&
+            source.media_type !== undefined &&
+            source.data !== undefined
+            ? [{ mediaType: source.media_type, base64: source.data }]
+            : [];
+        })
+      : [];
+  if (text.length > 0 || images.length > 0) {
+    entries.push({ kind: "message", role, uuid, text, images, createdAt });
   }
   for (const block of blocks) {
     if (role === "assistant" && block.type === "tool_use" && block.id !== undefined) {

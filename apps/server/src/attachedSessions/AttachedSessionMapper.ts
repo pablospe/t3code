@@ -10,6 +10,7 @@ import {
   CommandId,
   EventId,
   MessageId,
+  type ChatImageAttachment,
   type OrchestrationCommand,
   type OrchestrationSessionStatus,
   type ThreadId,
@@ -127,18 +128,21 @@ export function attachedEntryCommands(input: {
   readonly threadId: ThreadId;
   readonly entry: AttachedTranscriptEntry;
   readonly toolCalls: Map<string, AttachedToolCall>;
+  /** Images of a user message, already written to the attachment store. */
+  readonly attachments?: ReadonlyArray<ChatImageAttachment>;
 }): ReadonlyArray<OrchestrationCommand> {
   const { sessionId, threadId, entry } = input;
   switch (entry.kind) {
     case "message": {
       const messageId = attachedMessageId(sessionId, entry.uuid);
       if (entry.role === "user") {
+        if (entry.text.length === 0 && (input.attachments ?? []).length === 0) return [];
         return [
           {
             type: "thread.message.user.append",
             commandId: commandId(sessionId, "user", entry.uuid),
             threadId,
-            message: { messageId, text: entry.text, attachments: [] },
+            message: { messageId, text: entry.text, attachments: input.attachments ?? [] },
             createdAt: entry.createdAt,
           },
         ];
@@ -233,7 +237,7 @@ export function attachedHistoryImportCommand(input: {
   readonly maxMessages: number;
 }): OrchestrationCommand | null {
   const messages = input.entries
-    .flatMap((entry) => (entry.kind === "message" ? [entry] : []))
+    .flatMap((entry) => (entry.kind === "message" && entry.text.length > 0 ? [entry] : []))
     .slice(-input.maxMessages)
     .map((entry) => ({
       messageId: attachedMessageId(input.sessionId, entry.uuid),

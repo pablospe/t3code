@@ -136,6 +136,8 @@ function createHarness(options?: { readonly enabled?: boolean }) {
 
   return {
     append: (text: string) => NodeFS.appendFileSync(transcriptPath, text),
+    storedAttachmentBytes: (fileName: string) =>
+      NodeFS.statSync(NodePath.join(root, "userdata", "attachments", fileName)).size,
     setRoster,
     startService,
     thread,
@@ -296,6 +298,43 @@ describe("AttachedSessions", () => {
         yield* third.sweep;
         expect((yield* harness.shell)?.session?.status).toBe("stopped");
         yield* third.close;
+      }),
+    );
+  });
+
+  it.effect("mirrors an image pasted into the terminal as a message attachment", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Start"));
+        harness.setRoster({ status: "busy" });
+        const service = yield* harness.startService;
+        yield* service.sweep;
+
+        const png =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        harness.append(
+          record({
+            type: "user",
+            uuid: "u2",
+            timestamp: "2026-09-18T10:00:03.000Z",
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: "[Image #1] what is this?" },
+                { type: "image", source: { type: "base64", media_type: "image/png", data: png } },
+              ],
+            },
+          }),
+        );
+        yield* service.sweep;
+
+        const message = (yield* harness.thread)?.messages.at(-1);
+        expect(message?.text).toBe("[Image #1] what is this?");
+        const attachment = message?.attachments?.[0];
+        expect(attachment).toMatchObject({ type: "image", mimeType: "image/png", sizeBytes: 70 });
+        expect(harness.storedAttachmentBytes(`${attachment?.id}.png`)).toBe(70);
+        yield* service.close;
       }),
     );
   });

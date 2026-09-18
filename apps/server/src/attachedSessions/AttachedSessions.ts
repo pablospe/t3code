@@ -7,8 +7,12 @@
  * back, and no provider session or directory binding is created, so the provider
  * reaper and startup recovery never see these threads.
  */
+import * as NodeCrypto from "node:crypto";
+
 import {
   ATTACHED_CLAUDE_INSTANCE_ID,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type ChatImageAttachment,
   CommandId,
   ProjectId,
   attachedClaudeThreadId,
@@ -32,6 +36,8 @@ import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import { resolveAttachmentPath, toSafeThreadAttachmentSegment } from "../attachmentStore.ts";
+import { ServerConfig } from "../config.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -103,6 +109,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const crypto = yield* Crypto.Crypto;
+    const serverConfig = yield* ServerConfig;
 
     const rosterIntervalMs = Math.max(1, options?.rosterIntervalMs ?? DEFAULT_ROSTER_INTERVAL_MS);
     const tailIntervalMs = Math.max(1, options?.tailIntervalMs ?? DEFAULT_TAIL_INTERVAL_MS);
@@ -190,6 +197,62 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       return { entries, gitBranch, model };
     });
 
+    /**
+     * Writes a user message's pasted images into the attachment store. The id is
+     * derived from the transcript record, so a re-read finds the same file.
+     */
+    const persistImages = Effect.fn("AttachedSessions.persistImages")(function* (
+      session: TrackedSession,
+      entry: Extract<AttachedTranscriptEntry, { kind: "message" }>,
+    ) {
+      const threadSegment = toSafeThreadAttachmentSegment(session.threadId);
+      const attachments: Array<ChatImageAttachment> = [];
+      for (const [index, image] of entry.images.entries()) {
+        const bytes = Buffer.from(image.base64, "base64");
+        if (
+          threadSegment === null ||
+          !image.mediaType.toLowerCase().startsWith("image/") ||
+          bytes.byteLength === 0 ||
+          bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
+        ) {
+          continue;
+        }
+        const hash = NodeCrypto.createHash("sha256").update(`${entry.uuid}:${index}`).digest("hex");
+        const uuid = [
+          hash.slice(0, 8),
+          hash.slice(8, 12),
+          hash.slice(12, 16),
+          hash.slice(16, 20),
+          hash.slice(20, 32),
+        ].join("-");
+        const attachment: ChatImageAttachment = {
+          type: "image",
+          id: `${threadSegment}-${uuid}`,
+          name: `terminal-image-${index + 1}`,
+          mimeType: image.mediaType.toLowerCase(),
+          sizeBytes: bytes.byteLength,
+        };
+        const filePath = resolveAttachmentPath({
+          attachmentsDir: serverConfig.attachmentsDir,
+          attachment,
+        });
+        if (filePath === null) continue;
+        const written = yield* fileSystem
+          .makeDirectory(path.dirname(filePath), { recursive: true })
+          .pipe(
+            Effect.andThen(fileSystem.writeFile(filePath, bytes)),
+            Effect.as(true),
+            Effect.catch((cause) =>
+              Effect.logDebug("attached-sessions.image-write-failed", { cause }).pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+        if (written) attachments.push(attachment);
+      }
+      return attachments;
+    });
+
     const tail = Effect.fn("AttachedSessions.tail")(function* (session: TrackedSession) {
       if (session.suppressed) return;
       const read = yield* readNewEntries(session);
@@ -198,11 +261,16 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       session.seen = null;
       for (const entry of read.entries) {
         if (seen?.has(entryKey(entry))) continue;
+        const attachments =
+          entry.kind === "message" && entry.images.length > 0
+            ? yield* persistImages(session, entry)
+            : [];
         const commands = attachedEntryCommands({
           sessionId: session.sessionId,
           threadId: session.threadId,
           entry,
           toolCalls: session.toolCalls,
+          attachments,
         });
         yield* Effect.forEach(commands, dispatch, { discard: true });
       }
