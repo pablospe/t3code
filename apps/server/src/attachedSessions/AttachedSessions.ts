@@ -171,7 +171,6 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
 
     const saveSessions = Effect.suspend(() => {
       if (!cursorsDirty || sessions === null) return Effect.void;
-      cursorsDirty = false;
       return saveAttachedSessionCursors(
         cursorFilePath,
         new Map(
@@ -189,6 +188,12 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         ),
       ).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
+        // Still dirty after a failed write, so the next sweep tries again.
+        Effect.andThen(
+          Effect.sync(() => {
+            cursorsDirty = false;
+          }),
+        ),
         Effect.catch((cause) =>
           Effect.logWarning("attached-sessions.cursor-save-failed", { cause }),
         ),
@@ -540,7 +545,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
     /**
      * Claude sessions that T3 Code is running itself. The roster does not tell
      * them apart from terminal sessions, and mirroring one would duplicate its
-     * thread. A stopped binding has no process, so its session id is free to be
+     * thread. A stopped or errored binding has no process, so its session id is free to be
      * a terminal session (an imported one, for example).
      */
     const ownedSessionIds = directory.listBindings().pipe(
@@ -550,6 +555,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
             bindings.flatMap((binding) => {
               const cursor = binding.resumeCursor;
               return binding.status !== "stopped" &&
+                binding.status !== "error" &&
                 typeof cursor === "object" &&
                 cursor !== null &&
                 "resume" in cursor &&

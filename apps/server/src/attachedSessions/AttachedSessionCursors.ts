@@ -27,14 +27,21 @@ const AttachedSessionCursor = Schema.Struct({
 });
 export type AttachedSessionCursor = typeof AttachedSessionCursor.Type;
 
+// Entries are validated one by one on load. Losing every cursor to one bad
+// entry would recreate the mirrors of threads the user deleted.
 const AttachedSessionCursorFile = Schema.Struct({
-  sessions: Schema.Record(Schema.String, AttachedSessionCursor),
+  sessions: Schema.Record(Schema.String, Schema.Unknown),
 });
 
 const decodeCursorFile = Schema.decodeUnknownOption(
   Schema.fromJsonString(AttachedSessionCursorFile),
 );
-const encodeCursorFile = Schema.encodeSync(Schema.fromJsonString(AttachedSessionCursorFile));
+const decodeCursor = Schema.decodeUnknownOption(AttachedSessionCursor);
+const encodeCursorFile = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ sessions: Schema.Record(Schema.String, AttachedSessionCursor) }),
+  ),
+);
 
 // Ended sessions are kept so a deleted thread stays deleted, but not forever.
 const ENDED_CURSOR_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -46,10 +53,13 @@ export const loadAttachedSessionCursors = (filePath: string, nowMs: number) =>
     const text = yield* fileSystem.readFileString(filePath).pipe(Effect.orElseSucceed(() => ""));
     const sessions = Option.getOrUndefined(decodeCursorFile(text))?.sessions ?? {};
     return new Map(
-      Object.entries(sessions).filter(
-        ([, cursor]) =>
-          cursor.endedAt === null || nowMs - Date.parse(cursor.endedAt) < ENDED_CURSOR_MAX_AGE_MS,
-      ),
+      Object.entries(sessions).flatMap(([sessionId, value]) => {
+        const cursor = Option.getOrUndefined(decodeCursor(value));
+        return cursor !== undefined &&
+          (cursor.endedAt === null || nowMs - Date.parse(cursor.endedAt) < ENDED_CURSOR_MAX_AGE_MS)
+          ? [[sessionId, cursor] as const]
+          : [];
+      }),
     );
   });
 

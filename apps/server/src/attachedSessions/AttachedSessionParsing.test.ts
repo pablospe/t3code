@@ -1,6 +1,10 @@
 import * as Option from "effect/Option";
-import { describe, expect, it } from "vite-plus/test";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 
+import { loadAttachedSessionCursors } from "./AttachedSessionCursors.ts";
 import { parseAttachedTranscriptLine } from "./AttachedSessionTranscript.ts";
 import { parseClaudeAgentsRoster } from "./ClaudeAgentsRoster.ts";
 
@@ -77,4 +81,32 @@ describe("parseAttachedTranscriptLine", () => {
       }),
     ).toEqual([{ kind: "tool-completed", toolUseId: "tool-1", failed: true, createdAt: fallback }]);
   });
+});
+
+const cursorFileWithOneBadEntry = JSON.stringify({
+  sessions: {
+    good: {
+      transcriptPath: null,
+      offset: 42,
+      status: "ready",
+      waitRequestId: null,
+      toolCalls: {},
+      endedAt: null,
+    },
+    bad: { offset: "not a number" },
+  },
+});
+
+describe("loadAttachedSessionCursors", () => {
+  it.effect("drops only the entries it cannot read", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const filePath = `${yield* fileSystem.makeTempDirectoryScoped()}/attached-sessions.json`;
+      yield* fileSystem.writeFileString(filePath, cursorFileWithOneBadEntry);
+
+      const cursors = yield* loadAttachedSessionCursors(filePath, 0);
+      expect([...cursors.keys()]).toEqual(["good"]);
+      expect(cursors.get("good")?.offset).toBe(42);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
