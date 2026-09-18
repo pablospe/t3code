@@ -4,6 +4,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_SERVER_SETTINGS,
+  isAttachedSessionThreadId,
   type ServerSettings as ServerSettingsValue,
   type ModelSelection,
   type OrchestrationProjectShell,
@@ -535,6 +536,8 @@ export const reconcileProviderSessions = Effect.gen(function* () {
   );
   const orphanedThreads = threads.filter(
     (thread) =>
+      // Attached sessions never have a provider session here; their terminal owns them.
+      !isAttachedSessionThreadId(thread.id) &&
       thread.session !== null &&
       (thread.session.status === "starting" ||
         thread.session.status === "running" ||

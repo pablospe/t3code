@@ -16,6 +16,7 @@ import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 import { StorageCleanup } from "../../storageCleanup.ts";
+import { AttachedSessions } from "../../attachedSessions/AttachedSessions.ts";
 
 describe("OrchestrationReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<OrchestrationReactor, never> | null = null;
@@ -39,6 +40,16 @@ describe("OrchestrationReactor", () => {
               return Effect.void;
             },
             drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(AttachedSessions, {
+            start: () => {
+              started.push("attached-sessions");
+              return Effect.void;
+            },
+            drain: Effect.void,
+            sweep: () => Effect.void,
           }),
         ),
         Layer.provideMerge(
@@ -131,6 +142,7 @@ describe("OrchestrationReactor", () => {
       "pull-request-sync-reactor",
       "agent-awareness-relay",
       "storage-cleanup",
+      "attached-sessions",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

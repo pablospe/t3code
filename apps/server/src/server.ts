@@ -74,6 +74,8 @@ import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
+import * as AttachedSessions from "./attachedSessions/AttachedSessions.ts";
+import * as ClaudeAgentsRoster from "./attachedSessions/ClaudeAgentsRoster.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -249,6 +251,11 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(StorageCleanup.layer),
+  Layer.provideMerge(
+    AttachedSessions.layer.pipe(
+      Layer.provide(ClaudeAgentsRoster.layer.pipe(Layer.provide(ProcessRunner.layer))),
+    ),
+  ),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ThreadSettlementReactor.layer),
   Layer.provideMerge(PullRequestSyncReactor.layer),

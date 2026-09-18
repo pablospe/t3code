@@ -5,6 +5,7 @@ import {
   MessageId,
   ThreadLinkedPullRequest,
   UserInputRequestedPayload,
+  isAttachedSessionThreadId,
   isImportedAgentSessionMessageId,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -208,6 +209,19 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   return plannedEvents;
 });
 
+// An attached session is owned by the terminal it runs in. T3 mirrors it, so
+// anything that would drive or rewind the agent is rejected before it persists.
+const ATTACHED_SESSION_REJECTED_COMMAND_TYPES: ReadonlySet<OrchestrationCommand["type"]> = new Set([
+  "thread.turn.start",
+  "thread.turn.interrupt",
+  "thread.approval.respond",
+  "thread.user-input.respond",
+  "thread.user-input.dismiss",
+  "thread.checkpoint.revert",
+  "thread.conversation.revert",
+  "thread.session.stop",
+]);
+
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   command,
   readModel,
@@ -221,6 +235,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   OrchestrationCommandRejection | PlatformError.PlatformError,
   Crypto.Crypto
 > {
+  if (
+    ATTACHED_SESSION_REJECTED_COMMAND_TYPES.has(command.type) &&
+    "threadId" in command &&
+    isAttachedSessionThreadId(command.threadId)
+  ) {
+    return yield* new OrchestrationCommandInvariantError({
+      commandType: command.type,
+      detail: `Thread '${command.threadId}' mirrors an attached terminal session and is read-only. Drive it from its terminal.`,
+    });
+  }
+
   switch (command.type) {
     case "project.create": {
       yield* requireProjectAbsent({

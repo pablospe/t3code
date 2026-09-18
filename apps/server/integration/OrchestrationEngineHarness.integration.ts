@@ -38,6 +38,7 @@ import { makeProviderRegistryLayer } from "../src/provider/testUtils/providerReg
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import * as StorageCleanup from "../src/storageCleanup.ts";
+import * as AttachedSessions from "../src/attachedSessions/AttachedSessions.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapter } from "../src/provider/Layers/CodexAdapter.ts";
 import {
@@ -385,6 +386,13 @@ export const makeOrchestrationIntegrationHarness = (
         Layer.succeed(StorageCleanup.StorageCleanup, {
           start: () => Effect.void,
           drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(AttachedSessions.AttachedSessions, {
+          start: () => Effect.void,
+          drain: Effect.void,
+          sweep: () => Effect.void,
         }),
       ),
       Layer.provideMerge(runtimeIngestionLayer),

@@ -106,3 +106,9 @@ config directory and put the router's endpoint and credential variables in that
 instance's **Environment variables**. The router must run where the environment
 can reach it. Follow the [Claude Code Router instructions](https://github.com/musistudio/claude-code-router)
 for its installation and routing configuration.
+
+## Sessions running in a terminal
+
+T3 Code can show the Claude Code sessions you run yourself in a terminal as read-only threads, so you can follow them from the sidebar or your phone. The terminal stays in charge: T3 Code mirrors the conversation and tool activity, shows **Pending Approval** while the session waits for you, and marks the thread stopped when the session exits. You cannot reply, approve, or interrupt from T3 Code.
+
+This is off by default. To turn it on, add `"enableAttachedSessions": true` to `settings.json` in the T3 Code data directory. Attached threads appear under the project that contains the session's working directory, and a project is created when none matches. Archive a thread to stop mirroring it, and remove the setting to stop mirroring everything.
