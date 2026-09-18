@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { attachedClaudeThreadId } from "@t3tools/contracts";
+import { ProviderDriverKind, ThreadId, attachedClaudeThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -25,6 +25,10 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import {
+  ProviderSessionDirectory,
+  type ProviderRuntimeBindingWithMetadata,
+} from "../provider/Services/ProviderSessionDirectory.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as AttachedSessions from "./AttachedSessions.ts";
 import {
@@ -63,6 +67,7 @@ function createHarness(options?: { readonly enabled?: boolean }) {
   NodeFS.mkdirSync(transcriptDir, { recursive: true });
 
   let snapshot: Option.Option<ClaudeAgentsRosterSnapshot> = Option.none();
+  let ownedBindings: ReadonlyArray<ProviderRuntimeBindingWithMetadata> = [];
   const rosterLayer = Layer.succeed(ClaudeAgentsRoster, {
     snapshot: Effect.sync(() => snapshot),
   });
@@ -83,6 +88,16 @@ function createHarness(options?: { readonly enabled?: boolean }) {
     Layer.provideMerge(RepositoryIdentityResolver.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(rosterLayer),
+    Layer.provideMerge(
+      Layer.succeed(ProviderSessionDirectory, {
+        upsert: () => Effect.void,
+        recordImportedTranscript: () => Effect.void,
+        getProvider: () => Effect.die("unused"),
+        getBinding: () => Effect.succeedNone,
+        listThreadIds: () => Effect.succeed([]),
+        listBindings: () => Effect.sync(() => ownedBindings),
+      }),
+    ),
     Layer.provideMerge(
       ServerSettingsService.layerTest({ enableAttachedSessions: options?.enabled ?? true }),
     ),
@@ -136,6 +151,18 @@ function createHarness(options?: { readonly enabled?: boolean }) {
 
   return {
     append: (text: string) => NodeFS.appendFileSync(transcriptPath, text),
+    /** Marks the session as one T3 Code runs itself, with the given binding status. */
+    setOwnedByT3: (status: "running" | "stopped") => {
+      ownedBindings = [
+        {
+          threadId: ThreadId.make("t3-owned-thread"),
+          provider: ProviderDriverKind.make("claudeAgent"),
+          status,
+          resumeCursor: { threadId: "t3-owned-thread", resume: SESSION_ID },
+          lastSeenAt: "2026-09-18T10:00:00.000Z",
+        },
+      ];
+    },
     storedAttachmentBytes: (fileName: string) =>
       NodeFS.statSync(NodePath.join(root, "userdata", "attachments", fileName)).size,
     setRoster,
@@ -334,6 +361,27 @@ describe("AttachedSessions", () => {
         const attachment = message?.attachments?.[0];
         expect(attachment).toMatchObject({ type: "image", mimeType: "image/png", sizeBytes: 70 });
         expect(harness.storedAttachmentBytes(`${attachment?.id}.png`)).toBe(70);
+        yield* service.close;
+      }),
+    );
+  });
+
+  it.effect("skips a session T3 Code runs itself, but mirrors one it only imported", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Owned by T3"));
+        harness.setRoster({ status: "busy" });
+        harness.setOwnedByT3("running");
+        const service = yield* harness.startService;
+        yield* service.sweep;
+        expect(yield* harness.thread).toBeUndefined();
+
+        harness.setOwnedByT3("stopped");
+        yield* service.sweep;
+        expect((yield* harness.thread)?.messages.map((message) => message.text)).toEqual([
+          "Owned by T3",
+        ]);
         yield* service.close;
       }),
     );

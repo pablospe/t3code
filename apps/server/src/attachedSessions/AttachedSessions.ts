@@ -40,6 +40,7 @@ import { resolveAttachmentPath, toSafeThreadAttachmentSegment } from "../attachm
 import { ServerConfig } from "../config.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import {
@@ -110,6 +111,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
     const path = yield* Path.Path;
     const crypto = yield* Crypto.Crypto;
     const serverConfig = yield* ServerConfig;
+    const directory = yield* ProviderSessionDirectory;
 
     const rosterIntervalMs = Math.max(1, options?.rosterIntervalMs ?? DEFAULT_ROSTER_INTERVAL_MS);
     const tailIntervalMs = Math.max(1, options?.tailIntervalMs ?? DEFAULT_TAIL_INTERVAL_MS);
@@ -446,6 +448,30 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       }
     });
 
+    /**
+     * Claude sessions that T3 Code is running itself. The roster does not tell
+     * them apart from terminal sessions, and mirroring one would duplicate its
+     * thread. A stopped binding has no process, so its session id is free to be
+     * a terminal session (an imported one, for example).
+     */
+    const ownedSessionIds = directory.listBindings().pipe(
+      Effect.map(
+        (bindings) =>
+          new Set(
+            bindings.flatMap((binding) => {
+              const cursor = binding.resumeCursor;
+              return binding.status !== "stopped" &&
+                typeof cursor === "object" &&
+                cursor !== null &&
+                "resume" in cursor &&
+                typeof cursor.resume === "string"
+                ? [cursor.resume]
+                : [];
+            }),
+          ),
+      ),
+    );
+
     const rosterSweep = Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings;
       if (!settings.enableAttachedSessions) {
@@ -456,7 +482,12 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       if (Option.isNone(snapshot)) return;
       configDir = snapshot.value.configDir;
 
-      const live = new Map(snapshot.value.sessions.map((entry) => [entry.sessionId, entry]));
+      const owned = yield* ownedSessionIds;
+      const live = new Map(
+        snapshot.value.sessions
+          .filter((entry) => !owned.has(entry.sessionId))
+          .map((entry) => [entry.sessionId, entry]),
+      );
       for (const session of tracked.values()) {
         if (!live.has(session.sessionId)) yield* end(session);
       }
