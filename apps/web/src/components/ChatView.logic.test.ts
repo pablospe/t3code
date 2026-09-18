@@ -10,6 +10,7 @@ import {
   type ServerProvider,
   ThreadId,
   TurnId,
+  attachedClaudeThreadId,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -1455,6 +1456,15 @@ describe("buildRunningThreadTurnInterruptInput", () => {
       buildRunningThreadTurnInterruptInput(makeThread({ session: readySession }), "ready"),
     ).toBeNull();
     expect(buildRunningThreadTurnInterruptInput(null, "disconnected")).toBeNull();
+  });
+
+  it("offers no interrupt for an attached terminal session", () => {
+    const attachedThread = {
+      ...makeThread({ session: { ...readySession, status: "running", activeTurnId: null } }),
+      id: attachedClaudeThreadId("session-1"),
+    };
+
+    expect(buildRunningThreadTurnInterruptInput(attachedThread, "running")).toBeNull();
   });
 
   it("targets a running thread before its active turn has been projected", () => {

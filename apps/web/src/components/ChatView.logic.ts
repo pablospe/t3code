@@ -11,6 +11,7 @@ import {
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
+  isAttachedSessionThreadId,
   type ProviderInstanceId,
   type ServerProvider,
   type ScopedProjectRef,
@@ -651,6 +652,10 @@ export function buildRunningThreadTurnInterruptInput(
   phase: SessionPhase,
 ): { threadId: ThreadId; turnId?: TurnId } | null {
   if (phase !== "running" || thread?.session?.status !== "running") {
+    return null;
+  }
+  // An attached session can only be interrupted from the terminal that owns it.
+  if (isAttachedSessionThreadId(thread.id)) {
     return null;
   }
   return buildThreadTurnInterruptInput(thread);
