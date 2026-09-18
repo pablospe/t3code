@@ -6,6 +6,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderInstanceId,
   attachedClaudeThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -86,6 +87,48 @@ it.layer(NodeServices.layer)("attached session threads", (it) => {
       );
 
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("rejects moving the thread to a real provider, but allows a rename", () =>
+    Effect.gen(function* () {
+      const readModel = yield* attachedReadModel;
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.meta.update",
+            commandId: CommandId.make("command-attached-model"),
+            threadId,
+            modelSelection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude" },
+          },
+          readModel,
+        }),
+      );
+      const modeError = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.runtime-mode.set",
+            commandId: CommandId.make("command-attached-runtime-mode"),
+            threadId,
+            runtimeMode: "approval-required",
+            createdAt,
+          },
+          readModel,
+        }),
+      );
+      const renamed = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("command-attached-rename"),
+          threadId,
+          title: "Renamed",
+        },
+        readModel,
+      });
+
+      expect(error.message).toContain("read-only");
+      expect(modeError.message).toContain("read-only");
+      expect([renamed].flat()[0]?.type).toBe("thread.meta-updated");
     }),
   );
 

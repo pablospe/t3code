@@ -16,10 +16,8 @@ import {
   CommandId,
   ProjectId,
   attachedClaudeThreadId,
-  isAttachedSessionThreadId,
   type OrchestrationCommand,
   type OrchestrationSessionStatus,
-  type OrchestrationThread,
   type ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -56,12 +54,19 @@ import {
   parseAttachedTranscriptLine,
   type AttachedTranscriptEntry,
 } from "./AttachedSessionTranscript.ts";
+import {
+  loadAttachedSessionCursors,
+  saveAttachedSessionCursors,
+} from "./AttachedSessionCursors.ts";
 import { ClaudeAgentsRoster, type ClaudeAgentsRosterEntry } from "./ClaudeAgentsRoster.ts";
 
 const DEFAULT_ROSTER_INTERVAL_MS = 5_000;
 const DEFAULT_TAIL_INTERVAL_MS = 1_500;
-// How far back a first attach, or a catch-up after a server restart, reads.
-const BACKFILL_BYTES = 8 * 1024 * 1024;
+// The most one read takes in, and how far back a first attach looks for history.
+// A larger backlog is caught up over the following sweeps.
+const READ_WINDOW_BYTES = 8 * 1024 * 1024;
+// An empty roster is probed every sixth tick (30s by default) instead of every tick.
+const EMPTY_ROSTER_SKIPPED_PROBES = 5;
 const MAX_BACKFILL_MESSAGES = 200;
 const NEWLINE = 0x0a;
 
@@ -80,26 +85,35 @@ export class AttachedSessions extends Context.Service<AttachedSessions, Attached
 export interface AttachedSessionsLiveOptions {
   readonly rosterIntervalMs?: number;
   readonly tailIntervalMs?: number;
+  readonly readWindowBytes?: number;
 }
 
 interface TrackedSession {
   readonly sessionId: string;
   readonly threadId: ThreadId;
   transcriptPath: string | null;
+  /** Bytes of the transcript already mirrored. Persisted; reading only moves forward from here. */
   offset: number;
-  /** Entries already on the thread. Only needed for the first catch-up read. */
-  seen: Set<string> | null;
   readonly toolCalls: Map<string, AttachedToolCall>;
   status: OrchestrationSessionStatus | null;
   waitRequestId: string | null;
-  /** The user archived or deleted the thread, so the mirror is paused. */
-  suppressed: boolean;
+  endedAt: string | null;
+  /**
+   * The thread is archived or deleted, so nothing is mirrored into it. The
+   * offset stays where it was, and an unarchived thread catches up from there.
+   */
+  paused: boolean;
 }
 
-const entryKey = (entry: AttachedTranscriptEntry) =>
-  entry.kind === "message"
-    ? entry.uuid
-    : `${entry.toolUseId}:${entry.kind === "tool-started" ? "started" : "completed"}`;
+const SESSION_STATUSES: ReadonlySet<string> = new Set<OrchestrationSessionStatus>([
+  "idle",
+  "starting",
+  "running",
+  "ready",
+  "interrupted",
+  "stopped",
+  "error",
+]);
 
 const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
   Effect.gen(function* () {
@@ -115,14 +129,71 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
 
     const rosterIntervalMs = Math.max(1, options?.rosterIntervalMs ?? DEFAULT_ROSTER_INTERVAL_MS);
     const tailIntervalMs = Math.max(1, options?.tailIntervalMs ?? DEFAULT_TAIL_INTERVAL_MS);
+    const readWindowBytes = Math.max(1, options?.readWindowBytes ?? READ_WINDOW_BYTES);
+    const cursorFilePath = path.join(serverConfig.stateDir, "attached-sessions.json");
 
     // Sweeps run one at a time on the worker, so plain mutable state is safe.
-    const tracked = new Map<string, TrackedSession>();
-    const dismissed = new Set<string>();
+    // Null until the first sweep loads the cursor file.
+    let sessions: Map<string, TrackedSession> | null = null;
+    let cursorsDirty = false;
     let configDir: string | null = null;
-    let reconciledStoppedThreads = false;
+    let lastRosterSize: number | null = null;
 
     const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+
+    const loadSessions = Effect.gen(function* () {
+      if (sessions !== null) return sessions;
+      const cursors = yield* loadAttachedSessionCursors(
+        cursorFilePath,
+        (yield* DateTime.now).epochMilliseconds,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+      sessions = new Map(
+        [...cursors].map(([sessionId, cursor]): [string, TrackedSession] => [
+          sessionId,
+          {
+            sessionId,
+            threadId: attachedClaudeThreadId(sessionId),
+            transcriptPath: cursor.transcriptPath,
+            offset: cursor.offset,
+            toolCalls: new Map(Object.entries(cursor.toolCalls)),
+            status:
+              cursor.status !== null && SESSION_STATUSES.has(cursor.status)
+                ? (cursor.status as OrchestrationSessionStatus)
+                : null,
+            waitRequestId: cursor.waitRequestId,
+            endedAt: cursor.endedAt,
+            paused: false,
+          },
+        ]),
+      );
+      return sessions;
+    });
+
+    const saveSessions = Effect.suspend(() => {
+      if (!cursorsDirty || sessions === null) return Effect.void;
+      cursorsDirty = false;
+      return saveAttachedSessionCursors(
+        cursorFilePath,
+        new Map(
+          [...sessions].map(([sessionId, session]) => [
+            sessionId,
+            {
+              transcriptPath: session.transcriptPath,
+              offset: session.offset,
+              status: session.status,
+              waitRequestId: session.waitRequestId,
+              toolCalls: Object.fromEntries(session.toolCalls),
+              endedAt: session.endedAt,
+            },
+          ]),
+        ),
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.catch((cause) =>
+          Effect.logWarning("attached-sessions.cursor-save-failed", { cause }),
+        ),
+      );
+    });
 
     const dispatch = (command: OrchestrationCommand) =>
       engine.dispatch(command).pipe(
@@ -152,25 +223,36 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       return null;
     });
 
-    /** Reads whole lines appended since `offset` and advances past them. */
-    const readNewEntries = Effect.fn("AttachedSessions.readNewEntries")(function* (
+    const transcriptSize = Effect.fn("AttachedSessions.transcriptSize")(function* (
       session: TrackedSession,
     ) {
       session.transcriptPath ??= yield* findTranscript(session.sessionId);
       if (session.transcriptPath === null) return null;
-      const size = yield* fileSystem.stat(session.transcriptPath).pipe(
+      return yield* fileSystem.stat(session.transcriptPath).pipe(
         Effect.map((info) => Number(info.size)),
         Effect.orElseSucceed(() => null),
       );
-      if (size === null) return null;
-      // A shorter file was rewritten. Deterministic ids make re-reading it safe.
-      if (size < session.offset) session.offset = 0;
+    });
+
+    /** Reads whole lines appended since the cursor, one window at a time, and advances past them. */
+    const readNewEntries = Effect.fn("AttachedSessions.readNewEntries")(function* (
+      session: TrackedSession,
+    ) {
+      const size = yield* transcriptSize(session);
+      if (size === null || session.transcriptPath === null) return null;
+      if (size < session.offset) {
+        // The file was rewritten. What it held is already mirrored, and the
+        // backfilled part has no receipts to absorb a re-read, so skip to its end.
+        session.offset = size;
+        cursorsDirty = true;
+        return null;
+      }
       if (size === session.offset) return null;
 
       const chunks = yield* fileSystem
         .stream(session.transcriptPath, {
           offset: session.offset,
-          bytesToRead: Math.min(size - session.offset, BACKFILL_BYTES),
+          bytesToRead: Math.min(size - session.offset, readWindowBytes),
         })
         .pipe(
           Stream.runCollect,
@@ -180,10 +262,14 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       const lastNewline = bytes.lastIndexOf(NEWLINE);
       if (lastNewline === -1) {
         // No complete line yet, unless one line outgrew the read window: skip it.
-        if (bytes.byteLength === BACKFILL_BYTES) session.offset += bytes.byteLength;
+        if (bytes.byteLength === readWindowBytes) {
+          session.offset += bytes.byteLength;
+          cursorsDirty = true;
+        }
         return null;
       }
       session.offset += lastNewline + 1;
+      cursorsDirty = true;
 
       const fallbackCreatedAt = yield* nowIso;
       const entries: Array<AttachedTranscriptEntry> = [];
@@ -256,13 +342,10 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
     });
 
     const tail = Effect.fn("AttachedSessions.tail")(function* (session: TrackedSession) {
-      if (session.suppressed) return;
+      if (session.paused || session.endedAt !== null) return;
       const read = yield* readNewEntries(session);
       if (read === null) return;
-      const seen = session.seen;
-      session.seen = null;
       for (const entry of read.entries) {
-        if (seen?.has(entryKey(entry))) continue;
         const attachments =
           entry.kind === "message" && entry.images.length > 0
             ? yield* persistImages(session, entry)
@@ -301,89 +384,103 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       return { projectId, isRoot: true };
     });
 
-    const track = Effect.fn("AttachedSessions.track")(function* (sessionId: string) {
+    /** First sight of a session this server has no cursor for. */
+    const attach = Effect.fn("AttachedSessions.attach")(function* (
+      entry: ClaudeAgentsRosterEntry,
+      all: Map<string, TrackedSession>,
+    ) {
       const session: TrackedSession = {
-        sessionId,
-        threadId: attachedClaudeThreadId(sessionId),
-        transcriptPath: yield* findTranscript(sessionId),
+        sessionId: entry.sessionId,
+        threadId: attachedClaudeThreadId(entry.sessionId),
+        transcriptPath: null,
         offset: 0,
-        seen: null,
         toolCalls: new Map(),
         status: null,
         waitRequestId: null,
-        suppressed: false,
+        endedAt: null,
+        paused: false,
       };
-      if (session.transcriptPath !== null) {
-        const size = yield* fileSystem.stat(session.transcriptPath).pipe(
-          Effect.map((info) => Number(info.size)),
-          Effect.orElseSucceed(() => 0),
-        );
-        session.offset = Math.max(0, size - BACKFILL_BYTES);
-      }
-      tracked.set(sessionId, session);
-      return session;
-    });
+      all.set(entry.sessionId, session);
+      cursorsDirty = true;
+      const size = (yield* transcriptSize(session)) ?? 0;
 
-    /** Picks a mirror back up after a server restart without repeating what is already there. */
-    const resume = (session: TrackedSession, thread: OrchestrationThread) => {
-      const prefix = `attached:${session.sessionId}:`;
-      session.suppressed = thread.archivedAt !== null;
-      session.status = thread.session?.status ?? null;
-      session.seen = new Set(
-        [...thread.messages, ...thread.activities].map((item) => item.id.slice(prefix.length)),
-      );
-      const lastWait = thread.activities.findLast(
-        (activity) =>
-          activity.kind.startsWith("approval.") && activity.id.startsWith(`${prefix}wait:`),
-      );
-      session.waitRequestId =
-        lastWait?.kind === "approval.requested" ? lastWait.id.slice(0, -":requested".length) : null;
-    };
-
-    const attach = Effect.fn("AttachedSessions.attach")(function* (entry: ClaudeAgentsRosterEntry) {
-      const session = yield* track(entry.sessionId);
-      const { threadId } = session;
-      const startsMidFile = session.offset > 0;
-
-      const existing = yield* query.getThreadDetailById(threadId);
+      const existing = yield* query.getThreadShellById(session.threadId);
       if (Option.isSome(existing)) {
-        resume(session, existing.value);
-        return session;
-      }
-      if (dismissed.has(entry.sessionId)) {
-        session.suppressed = true;
+        // The cursor was lost. Nothing says how much of the transcript is already
+        // on the thread, so carry on from its end rather than risk repeating it.
+        session.offset = size;
+        session.status = existing.value.session?.status ?? null;
+        if (existing.value.hasPendingApprovals) {
+          // Find the wait that is still open, so it can be resolved later.
+          const prefix = `attached:${entry.sessionId}:wait:`;
+          const detail = yield* query.getThreadDetailById(session.threadId, {
+            activityKinds: ["approval.requested", "approval.resolved"],
+          });
+          const lastWait = Option.getOrUndefined(detail)?.activities.findLast((activity) =>
+            activity.id.startsWith(prefix),
+          );
+          session.waitRequestId =
+            lastWait?.kind === "approval.requested"
+              ? lastWait.id.slice(0, -":requested".length)
+              : null;
+        }
         return session;
       }
 
+      session.offset = Math.max(0, size - readWindowBytes);
+      const startsMidFile = session.offset > 0;
       const read = yield* readNewEntries(session);
-      // The first line of a mid-file read is a fragment, and it never decodes.
       const entries = read?.entries ?? [];
+      // Tools still running at attach time keep their title when they complete.
+      for (const item of entries) {
+        if (item.kind === "tool-started") {
+          session.toolCalls.set(item.toolUseId, { name: item.name, detail: item.detail });
+        } else if (item.kind === "tool-completed") {
+          session.toolCalls.delete(item.toolUseId);
+        }
+      }
+
       const project = yield* resolveProject(entry.cwd);
       const createdAt = yield* nowIso;
-      yield* engine.dispatch({
-        type: "thread.create",
-        // Not deterministic: a deleted thread may be recreated after a restart.
-        commandId: CommandId.make(`attached:${entry.sessionId}:create:${createdAt}`),
-        threadId,
-        projectId: project.projectId,
-        title: `⌁ ${entry.name ?? (path.basename(entry.cwd) || "terminal session")}`,
-        modelSelection: { instanceId: ATTACHED_CLAUDE_INSTANCE_ID, model: read?.model ?? "claude" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: read?.gitBranch ?? null,
-        worktreePath: project.isRoot ? null : entry.cwd,
-        createdAt,
-        historyImport: true,
-      });
+      const created = yield* engine
+        .dispatch({
+          type: "thread.create",
+          // Not deterministic: a thread whose cursor expired may be created again.
+          commandId: CommandId.make(`attached:${entry.sessionId}:create:${createdAt}`),
+          threadId: session.threadId,
+          projectId: project.projectId,
+          title: `⌁ ${entry.name ?? (path.basename(entry.cwd) || "terminal session")}`,
+          modelSelection: {
+            instanceId: ATTACHED_CLAUDE_INSTANCE_ID,
+            model: read?.model ?? "claude",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: read?.gitBranch ?? null,
+          worktreePath: project.isRoot ? null : entry.cwd,
+          createdAt,
+          historyImport: true,
+        })
+        .pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        );
+      if (!created) {
+        // An archived thread is invisible to the lookup above but still exists.
+        session.paused = true;
+        session.offset = size;
+        return session;
+      }
       const historyImport = attachedHistoryImportCommand({
         sessionId: entry.sessionId,
-        threadId,
+        threadId: session.threadId,
         entries,
         maxMessages: MAX_BACKFILL_MESSAGES,
+        createdAt,
       });
       if (historyImport !== null) yield* dispatch(historyImport);
       yield* Effect.logInfo("attached-sessions.attached", {
-        threadId,
+        threadId: session.threadId,
         cwd: entry.cwd,
         backfilledFromStart: !startsMidFile,
       });
@@ -409,6 +506,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
           }),
         );
         session.status = next.status;
+        cursorsDirty = true;
       }
       if (next.waiting === (session.waitRequestId !== null)) return;
       const requestId = session.waitRequestId ?? attachedWaitRequestId(session.sessionId, now);
@@ -423,29 +521,20 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         }),
       );
       session.waitRequestId = next.waiting ? requestId : null;
+      cursorsDirty = true;
     });
 
+    /**
+     * The session is gone. Its cursor is kept, marked ended, so an archived or
+     * deleted thread is not recreated if the session id ever shows up again.
+     */
     const end = Effect.fn("AttachedSessions.end")(function* (session: TrackedSession) {
-      tracked.delete(session.sessionId);
-      if (session.suppressed) return;
       yield* tail(session);
+      // An archived thread still takes this, so it is not left looking busy.
       yield* applyStatus(session, { status: "stopped", waiting: false, waitingFor: null });
-    });
-
-    /** Threads left running by a previous server run whose session is gone now. */
-    const stopOrphanedThreads = Effect.fn("AttachedSessions.stopOrphanedThreads")(function* (
-      liveThreadIds: ReadonlySet<string>,
-    ) {
-      const { threads } = yield* query.getShellSnapshot();
-      for (const thread of threads) {
-        if (!isAttachedSessionThreadId(thread.id) || liveThreadIds.has(thread.id)) continue;
-        if (thread.session === null || thread.session.status === "stopped") continue;
-        const detail = yield* query.getThreadDetailById(thread.id);
-        if (Option.isNone(detail)) continue;
-        const session = yield* track(thread.id.slice(attachedClaudeThreadId("").length));
-        resume(session, detail.value);
-        yield* end(session);
-      }
+      session.toolCalls.clear();
+      session.endedAt = yield* nowIso;
+      cursorsDirty = true;
     });
 
     /**
@@ -473,14 +562,19 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
     );
 
     const rosterSweep = Effect.gen(function* () {
+      const all = yield* loadSessions;
+      const running = () => [...all.values()].filter((session) => session.endedAt === null);
       const settings = yield* serverSettings.getSettings;
       if (!settings.enableAttachedSessions) {
-        yield* Effect.forEach([...tracked.values()], end, { discard: true });
+        // Also covers a server that was restarted with the setting turned off.
+        yield* Effect.forEach(running(), end, { discard: true });
+        lastRosterSize = null;
         return;
       }
       const snapshot = yield* roster.snapshot;
       if (Option.isNone(snapshot)) return;
       configDir = snapshot.value.configDir;
+      lastRosterSize = snapshot.value.sessions.length;
 
       const owned = yield* ownedSessionIds;
       const live = new Map(
@@ -488,29 +582,19 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
           .filter((entry) => !owned.has(entry.sessionId))
           .map((entry) => [entry.sessionId, entry]),
       );
-      for (const session of tracked.values()) {
+      for (const session of running()) {
         if (!live.has(session.sessionId)) yield* end(session);
       }
-      if (!reconciledStoppedThreads) {
-        reconciledStoppedThreads = true;
-        yield* stopOrphanedThreads(
-          new Set([...live.keys()].map((sessionId) => attachedClaudeThreadId(sessionId))),
-        );
-      }
       for (const entry of live.values()) {
-        let session = tracked.get(entry.sessionId);
-        if (session !== undefined) {
-          // Archive, unarchive and delete all change whether the mirror should run.
-          const shell = yield* query.getThreadShellById(session.threadId);
-          if (Option.isNone(shell)) {
-            dismissed.add(entry.sessionId);
-            session.suppressed = true;
-          } else if (session.suppressed !== (shell.value.archivedAt !== null)) {
-            session = undefined;
-          }
+        const known = all.get(entry.sessionId);
+        if (known !== undefined && known.endedAt !== null) {
+          known.endedAt = null;
+          cursorsDirty = true;
         }
-        session ??= yield* attach(entry);
-        if (session.suppressed) continue;
+        const session = known ?? (yield* attach(entry, all));
+        // Archived and deleted threads are both invisible here, and both pause the mirror.
+        session.paused = Option.isNone(yield* query.getThreadShellById(session.threadId));
+        if (session.paused) continue;
         yield* applyStatus(session, {
           status: attachedSessionStatus(entry.status),
           waiting: entry.status === "waiting",
@@ -520,7 +604,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
     });
 
     const tailSweep = Effect.suspend(() =>
-      Effect.forEach([...tracked.values()], tail, { discard: true }),
+      Effect.forEach(sessions === null ? [] : [...sessions.values()], tail, { discard: true }),
     );
 
     // A slow sweep must not let the schedule pile up identical work behind it.
@@ -530,6 +614,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         queued.delete(kind);
         return kind === "roster" ? rosterSweep.pipe(Effect.andThen(tailSweep)) : tailSweep;
       }).pipe(
+        Effect.andThen(saveSessions),
         Effect.catch((error: unknown) =>
           Effect.logWarning("attached-sessions.sweep-failed", { kind, error }),
         ),
@@ -548,13 +633,26 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
 
     const start: AttachedSessionsShape["start"] = () =>
       Effect.gen(function* () {
+        // Each probe spawns the CLI. With no terminal sessions around there is
+        // nothing to keep current, so look for new ones less often.
+        let skippedProbes = 0;
         yield* forkParked(
-          sweep("roster").pipe(Effect.repeat(Schedule.spaced(Duration.millis(rosterIntervalMs)))),
+          Effect.suspend(() => {
+            if (lastRosterSize === 0 && skippedProbes < EMPTY_ROSTER_SKIPPED_PROBES) {
+              skippedProbes += 1;
+              return Effect.void;
+            }
+            skippedProbes = 0;
+            return sweep("roster");
+          }).pipe(Effect.repeat(Schedule.spaced(Duration.millis(rosterIntervalMs)))),
         );
         yield* forkParked(
-          Effect.suspend(() => (tracked.size === 0 ? Effect.void : sweep("tail"))).pipe(
-            Effect.repeat(Schedule.spaced(Duration.millis(tailIntervalMs))),
-          ),
+          Effect.suspend(() =>
+            sessions !== null &&
+            [...sessions.values()].some((session) => session.endedAt === null && !session.paused)
+              ? sweep("tail")
+              : Effect.void,
+          ).pipe(Effect.repeat(Schedule.spaced(Duration.millis(tailIntervalMs)))),
         );
       });
 

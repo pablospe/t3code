@@ -235,6 +235,8 @@ export function attachedHistoryImportCommand(input: {
   readonly threadId: ThreadId;
   readonly entries: ReadonlyArray<AttachedTranscriptEntry>;
   readonly maxMessages: number;
+  /** When the thread was created. A recreated thread must not reuse the old receipt. */
+  readonly createdAt: string;
 }): OrchestrationCommand | null {
   const messages = input.entries
     .flatMap((entry) => (entry.kind === "message" && entry.text.length > 0 ? [entry] : []))
@@ -248,7 +250,7 @@ export function attachedHistoryImportCommand(input: {
   if (messages.length === 0) return null;
   return {
     type: "thread.history.import",
-    commandId: commandId(input.sessionId, "history-import", "initial"),
+    commandId: commandId(input.sessionId, "history-import", input.createdAt),
     threadId: input.threadId,
     messages,
   };

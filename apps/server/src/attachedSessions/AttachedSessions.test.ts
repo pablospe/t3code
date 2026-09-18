@@ -4,7 +4,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId, attachedClaudeThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  ProviderDriverKind,
+  ThreadId,
+  attachedClaudeThreadId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -41,13 +46,21 @@ const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 const threadId = attachedClaudeThreadId(SESSION_ID);
 
 const record = (value: Record<string, unknown>) => `${JSON.stringify(value)}\n`;
-const userRecord = (uuid: string, text: string) =>
+const userRecord = (uuid: string, text: string, timestamp = "2026-09-18T10:00:00.000Z") =>
   record({
     type: "user",
     uuid,
-    timestamp: "2026-09-18T10:00:00.000Z",
+    timestamp,
     gitBranch: "main",
     message: { role: "user", content: text },
+  });
+const toolResultRecord = (uuid: string, toolUseId: string) =>
+  record({
+    type: "user",
+    uuid,
+    timestamp: "2026-09-18T10:00:02.000Z",
+    toolUseResult: {},
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId }] },
   });
 const assistantRecord = (uuid: string, content: ReadonlyArray<unknown>) =>
   record({
@@ -105,16 +118,19 @@ function createHarness(options?: { readonly enabled?: boolean }) {
     Layer.provideMerge(NodeServices.layer),
   );
   /** A fresh service instance has no memory of earlier sweeps, like a restarted server. */
-  const startService = Effect.gen(function* () {
-    const scope = yield* Scope.make();
-    const context = yield* Layer.build(AttachedSessions.makeLayer()).pipe(Scope.provide(scope));
-    const service = Context.get(context, AttachedSessions.AttachedSessions);
-    return {
-      sweep: service.sweep("roster").pipe(Effect.andThen(service.drain)),
-      close: Scope.close(scope, Exit.void),
-    };
-  });
-
+  const startServiceWith = (serviceOptions?: AttachedSessions.AttachedSessionsLiveOptions) =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const context = yield* Layer.build(AttachedSessions.makeLayer(serviceOptions)).pipe(
+        Scope.provide(scope),
+      );
+      const service = Context.get(context, AttachedSessions.AttachedSessions);
+      return {
+        sweep: service.sweep("roster").pipe(Effect.andThen(service.drain)),
+        close: Scope.close(scope, Exit.void),
+      };
+    });
+  const startService = startServiceWith();
   const setRoster = (entry: Partial<ClaudeAgentsRosterEntry> | null | "probe-failed") => {
     snapshot =
       entry === "probe-failed"
@@ -167,6 +183,16 @@ function createHarness(options?: { readonly enabled?: boolean }) {
       NodeFS.statSync(NodePath.join(root, "userdata", "attachments", fileName)).size,
     setRoster,
     startService,
+    startServiceWith,
+    rewriteTranscript: (text: string) => NodeFS.writeFileSync(transcriptPath, text),
+    dispatchThreadCommand: (type: "thread.archive" | "thread.unarchive" | "thread.delete") =>
+      Effect.flatMap(Effect.service(OrchestrationEngineService), (engine) =>
+        engine.dispatch({ type, commandId: CommandId.make(`test:${type}`), threadId }),
+      ),
+    setEnabled: (enabled: boolean) =>
+      Effect.flatMap(Effect.service(ServerSettingsService), (settings) =>
+        settings.updateSettings({ enableAttachedSessions: enabled }),
+      ),
     thread,
     shell,
     latestSequence,
@@ -383,6 +409,202 @@ describe("AttachedSessions", () => {
           "Owned by T3",
         ]);
         yield* service.close;
+      }),
+    );
+  });
+
+  it.effect("does not repeat backfilled history or pre-attach tool calls after a restart", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        // More than the backfill cap, plus a finished tool call the import never carries.
+        for (let index = 0; index < 250; index += 1) {
+          harness.append(userRecord(`u${index}`, `Message ${index}`));
+        }
+        harness.append(
+          assistantRecord("a-tool", [
+            { type: "tool_use", id: "tool-old", name: "Bash", input: { command: "ls" } },
+          ]),
+        );
+        harness.append(toolResultRecord("u-tool", "tool-old"));
+        harness.setRoster({ status: "idle" });
+        const first = yield* harness.startService;
+        yield* first.sweep;
+        yield* first.close;
+        expect((yield* harness.thread)?.messages).toHaveLength(200);
+        const beforeRestart = yield* harness.latestSequence;
+
+        const second = yield* harness.startService;
+        yield* second.sweep;
+        expect(yield* harness.latestSequence).toBe(beforeRestart);
+        expect((yield* harness.thread)?.activities).toEqual([]);
+        yield* second.close;
+      }),
+    );
+  });
+
+  it.effect("keeps a running tool's title when it completes after a restart", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Go"));
+        harness.setRoster({ status: "busy" });
+        const first = yield* harness.startService;
+        yield* first.sweep;
+        harness.append(
+          assistantRecord("a1", [
+            { type: "tool_use", id: "tool-1", name: "Bash", input: { command: "sleep 60" } },
+          ]),
+        );
+        yield* first.sweep;
+        yield* first.close;
+
+        harness.append(toolResultRecord("u2", "tool-1"));
+        const second = yield* harness.startService;
+        yield* second.sweep;
+        expect(
+          (yield* harness.thread)?.activities.map((activity) => [activity.kind, activity.summary]),
+        ).toEqual([
+          ["tool.updated", "Bash"],
+          ["tool.completed", "Bash"],
+        ]);
+        yield* second.close;
+      }),
+    );
+  });
+
+  it.effect("does not duplicate or concatenate text when the transcript is rewritten", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Hi"));
+        harness.append(assistantRecord("a1", [{ type: "text", text: "Hello" }]));
+        harness.append(assistantRecord("a2", [{ type: "text", text: "A longer second reply" }]));
+        harness.setRoster({ status: "idle" });
+        const service = yield* harness.startService;
+        yield* service.sweep;
+        const beforeRewrite = yield* harness.latestSequence;
+
+        harness.rewriteTranscript(
+          userRecord("u1", "Hi") + assistantRecord("a1", [{ type: "text", text: "Hello" }]),
+        );
+        yield* service.sweep;
+        expect(yield* harness.latestSequence).toBe(beforeRewrite);
+
+        harness.append(assistantRecord("a3", [{ type: "text", text: "After the rewrite" }]));
+        yield* service.sweep;
+        expect((yield* harness.thread)?.messages.map((message) => message.text)).toEqual([
+          "Hi",
+          "Hello",
+          "A longer second reply",
+          "After the rewrite",
+        ]);
+        yield* service.close;
+      }),
+    );
+  });
+
+  it.effect(
+    "keeps an archived mirror quiet across a restart and catches up when unarchived",
+    () => {
+      const harness = createHarness();
+      return harness.run(
+        Effect.gen(function* () {
+          harness.append(userRecord("u1", "Before archive"));
+          harness.setRoster({ status: "busy" });
+          const first = yield* harness.startService;
+          yield* first.sweep;
+          yield* first.close;
+          yield* harness.dispatchThreadCommand("thread.archive");
+          const archivedAt = yield* harness.latestSequence;
+
+          harness.append(assistantRecord("a1", [{ type: "text", text: "While archived" }]));
+          const second = yield* harness.startService;
+          yield* second.sweep;
+          yield* second.sweep;
+          expect(yield* harness.latestSequence).toBe(archivedAt);
+
+          yield* harness.dispatchThreadCommand("thread.unarchive");
+          yield* second.sweep;
+          expect((yield* harness.thread)?.messages.map((message) => message.text)).toEqual([
+            "Before archive",
+            "While archived",
+          ]);
+          yield* second.close;
+        }),
+      );
+    },
+  );
+
+  it.effect("keeps a deleted mirror deleted across a restart", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Doomed"));
+        harness.setRoster({ status: "busy" });
+        const first = yield* harness.startService;
+        yield* first.sweep;
+        yield* first.close;
+        yield* harness.dispatchThreadCommand("thread.delete");
+        const deletedAt = yield* harness.latestSequence;
+
+        harness.append(assistantRecord("a1", [{ type: "text", text: "Still talking" }]));
+        const second = yield* harness.startService;
+        yield* second.sweep;
+        expect(yield* harness.latestSequence).toBe(deletedAt);
+        expect(yield* harness.thread).toBeUndefined();
+        yield* second.close;
+      }),
+    );
+  });
+
+  it.effect("catches up on a backlog larger than one read window without gaps", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u0", "Start"));
+        harness.setRoster({ status: "busy" });
+        const first = yield* harness.startServiceWith({ readWindowBytes: 600 });
+        yield* first.sweep;
+        yield* first.close;
+
+        const downtime = Array.from({ length: 12 }, (_, index) => `Downtime ${index}`);
+        for (const [index, text] of downtime.entries()) {
+          harness.append(
+            userRecord(
+              `d${index}`,
+              text,
+              `2026-09-18T10:01:${String(index).padStart(2, "0")}.000Z`,
+            ),
+          );
+        }
+        const second = yield* harness.startServiceWith({ readWindowBytes: 600 });
+        for (let sweeps = 0; sweeps < 12; sweeps += 1) yield* second.sweep;
+        expect((yield* harness.thread)?.messages.map((message) => message.text)).toEqual([
+          "Start",
+          ...downtime,
+        ]);
+        yield* second.close;
+      }),
+    );
+  });
+
+  it.effect("stops mirrored threads when the server restarts with the setting off", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Busy"));
+        harness.setRoster({ status: "busy" });
+        const first = yield* harness.startService;
+        yield* first.sweep;
+        yield* first.close;
+        expect((yield* harness.shell)?.session?.status).toBe("running");
+
+        yield* harness.setEnabled(false);
+        const second = yield* harness.startService;
+        yield* second.sweep;
+        expect((yield* harness.shell)?.session?.status).toBe("stopped");
+        yield* second.close;
       }),
     );
   });

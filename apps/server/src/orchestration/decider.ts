@@ -220,6 +220,8 @@ const ATTACHED_SESSION_REJECTED_COMMAND_TYPES: ReadonlySet<OrchestrationCommand[
   "thread.checkpoint.revert",
   "thread.conversation.revert",
   "thread.session.stop",
+  "thread.runtime-mode.set",
+  "thread.interaction-mode.set",
 ]);
 
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
@@ -236,9 +238,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   Crypto.Crypto
 > {
   if (
-    ATTACHED_SESSION_REJECTED_COMMAND_TYPES.has(command.type) &&
     "threadId" in command &&
-    isAttachedSessionThreadId(command.threadId)
+    isAttachedSessionThreadId(command.threadId) &&
+    (ATTACHED_SESSION_REJECTED_COMMAND_TYPES.has(command.type) ||
+      // Pointing the thread at a real provider would let T3 start a session of its own.
+      (command.type === "thread.meta.update" && command.modelSelection !== undefined))
   ) {
     return yield* new OrchestrationCommandInvariantError({
       commandType: command.type,
