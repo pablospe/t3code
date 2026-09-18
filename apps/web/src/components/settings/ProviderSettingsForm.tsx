@@ -119,17 +119,13 @@ export function deriveProviderSettingsFields(
     });
 }
 
-export function readProviderConfigString(config: unknown, key: string): string {
+function readProviderConfigString(config: unknown, key: string): string {
   if (config === null || typeof config !== "object") return "";
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "string" ? value : "";
 }
 
-export function readProviderConfigBoolean(
-  config: unknown,
-  key: string,
-  defaultValue = false,
-): boolean {
+function readProviderConfigBoolean(config: unknown, key: string, defaultValue = false): boolean {
   if (config === null || typeof config !== "object") return defaultValue;
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "boolean" ? value : defaultValue;
@@ -269,14 +265,14 @@ function ProviderSettingsFieldRow({
           value={value}
           inputId={inputId}
           size="sm"
-          className="w-full sm:w-56"
+          className="w-full max-w-full @min-[32rem]/settings-row:w-56"
           onChange={onChange}
         />
       ) : field.control === "textarea" ? (
         <Textarea
           id={inputId}
           aria-describedby={descriptionId}
-          className="w-full sm:w-96"
+          className="w-full max-w-full @min-[32rem]/settings-row:w-[min(24rem,50cqw)]"
           value={readProviderConfigString(value, field.key)}
           onChange={(event) =>
             onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
@@ -289,7 +285,7 @@ function ProviderSettingsFieldRow({
           id={inputId}
           aria-describedby={descriptionId}
           size="sm"
-          className="w-full sm:w-56"
+          className="w-full max-w-full @min-[32rem]/settings-row:w-56"
           type={field.control === "password" ? "password" : undefined}
           autoComplete={field.control === "password" ? "off" : undefined}
           value={readProviderConfigString(value, field.key)}

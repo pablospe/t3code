@@ -69,6 +69,7 @@ export type GetAuthSessionByIdInput = typeof GetAuthSessionByIdInput.Type;
 
 export const ListActiveAuthSessionsInput = Schema.Struct({
   now: Schema.DateTimeUtcFromString,
+  connectedSessionIds: Schema.optionalKey(Schema.Array(AuthSessionId)),
 });
 export type ListActiveAuthSessionsInput = typeof ListActiveAuthSessionsInput.Type;
 
@@ -106,6 +107,9 @@ export class AuthSessionRepository extends Context.Service<
     readonly createReplacingActive: (
       input: CreateReplacingActiveAuthSessionInput,
     ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    readonly createIfAbsent: (
+      input: CreateAuthSessionInput,
+    ) => Effect.Effect<void, AuthSessionRepositoryError>;
     readonly getById: (
       input: GetAuthSessionByIdInput,
     ) => Effect.Effect<Option.Option<AuthSessionRecord>, AuthSessionRepositoryError>;
@@ -199,13 +203,15 @@ function toPersistenceSqlOrDecodeError(
         });
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const createSessionRow = SqlSchema.void({
-    Request: CreateAuthSessionInput,
-    execute: (input) =>
-      sql`
+  const insertSessionRow = (ignoreExisting: boolean) =>
+    SqlSchema.void({
+      Request: CreateAuthSessionInput,
+      execute: (input) =>
+        sql`
         INSERT INTO auth_sessions (
           session_id,
           subject,
@@ -236,8 +242,11 @@ export const make = Effect.gen(function* () {
           ${input.expiresAt},
           NULL
         )
+        ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
       `,
-  });
+    });
+  const createSessionRow = insertSessionRow(false);
+  const createSessionRowIfAbsent = insertSessionRow(true);
 
   const getSessionRowById = SqlSchema.findOneOption({
     Request: GetAuthSessionByIdInput,
@@ -282,7 +291,7 @@ export const make = Effect.gen(function* () {
   const listActiveSessionRows = SqlSchema.findAll({
     Request: ListActiveAuthSessionsInput,
     Result: AuthSessionRawDbRow,
-    execute: ({ now }) =>
+    execute: ({ now, connectedSessionIds = [] }) =>
       sql`
         SELECT
           session_id AS "sessionId",
@@ -301,7 +310,7 @@ export const make = Effect.gen(function* () {
           revoked_at AS "revokedAt"
         FROM auth_sessions
         WHERE revoked_at IS NULL
-          AND expires_at > ${now}
+          AND (expires_at > ${now} OR ${sql.in("session_id", connectedSessionIds)})
         ORDER BY issued_at DESC, session_id DESC
       `,
   });
@@ -390,6 +399,17 @@ export const make = Effect.gen(function* () {
           ),
         ),
       );
+
+  const createIfAbsent: AuthSessionRepository["Service"]["createIfAbsent"] = (input) =>
+    createSessionRowIfAbsent(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.createIfAbsent:query",
+          "AuthSessionRepository.createIfAbsent:encodeRequest",
+          { sessionId: input.sessionId },
+        ),
+      ),
+    );
 
   const getById: AuthSessionRepository["Service"]["getById"] = (input) =>
     getSessionRowById(input).pipe(
@@ -491,6 +511,7 @@ export const make = Effect.gen(function* () {
   return {
     create,
     createReplacingActive,
+    createIfAbsent,
     getById,
     listActive,
     revoke,

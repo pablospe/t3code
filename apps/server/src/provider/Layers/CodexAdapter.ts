@@ -26,6 +26,7 @@ import {
   RuntimeRequestId,
   RuntimeTaskId,
   type RuntimeTaskUsage,
+  type TurnTokenUsage,
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
@@ -35,7 +36,6 @@ import * as NodeCrypto from "node:crypto";
 import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -66,11 +66,17 @@ import {
   makeCodexSessionRuntime,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
+  type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
-import { codexRateLimitsToUpdate } from "./codexUsageLimits.ts";
+import {
+  type CodexRateLimitSnapshot,
+  codexRateLimitsToUpdate,
+  codexUsageLimitMessage,
+  mergeCodexRateLimits,
+} from "./codexUsageLimits.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -99,7 +105,32 @@ interface CodexAdapterSessionContext {
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
+  readonly turnTokenUsage: CodexTurnTokenUsageState;
   stopped: boolean;
+}
+
+type CodexCumulativeTokenUsage = {
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens?: number;
+  readonly outputTokens: number;
+  readonly reasoningTokens: number;
+};
+
+interface CodexTurnTokenUsageAccumulator {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationTokens: number | undefined;
+  outputTokens: number;
+  reasoningTokens: number;
+  observed: boolean;
+  hasSubagents: boolean;
+}
+
+interface CodexTurnTokenUsageState {
+  baseline: CodexCumulativeTokenUsage | undefined;
+  activeTurnId: string | undefined;
+  readonly byTurnId: Map<string, CodexTurnTokenUsageAccumulator>;
 }
 
 function mapCodexRuntimeError(
@@ -429,6 +460,162 @@ function normalizeCodexTokenUsage(
   };
 }
 
+function codexTokenUsageBreakdown(
+  usage: EffectCodexSchema.V2ThreadTokenUsageUpdatedNotification__TokenUsageBreakdown,
+): CodexCumulativeTokenUsage {
+  return {
+    inputTokens: usage.inputTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    ...(usage.cacheWriteInputTokens !== undefined
+      ? { cacheCreationTokens: usage.cacheWriteInputTokens }
+      : {}),
+    outputTokens: usage.outputTokens,
+    reasoningTokens: usage.reasoningOutputTokens,
+  };
+}
+
+function makeCodexTurnTokenUsageState(): CodexTurnTokenUsageState {
+  return {
+    baseline: undefined,
+    activeTurnId: undefined,
+    byTurnId: new Map(),
+  };
+}
+
+function getCodexTurnAccumulator(
+  state: CodexTurnTokenUsageState,
+  turnId: string,
+): CodexTurnTokenUsageAccumulator {
+  const existing = state.byTurnId.get(turnId);
+  if (existing) return existing;
+  const created: CodexTurnTokenUsageAccumulator = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    observed: false,
+    hasSubagents: false,
+  };
+  state.byTurnId.set(turnId, created);
+  return created;
+}
+
+/**
+ * Usage added by one `thread/tokenUsage/updated` notification. Codex reports a
+ * running `total` for the thread and `last`, the usage of the newest model
+ * response. Within a turn the growth of `total` equals `last`. Without a prior
+ * total (first update after resume or rollback), or when Codex reset the
+ * running total, `last` is the delta.
+ */
+function codexTurnTokenUsageDelta(
+  previous: CodexCumulativeTokenUsage | undefined,
+  current: CodexCumulativeTokenUsage,
+  last: CodexCumulativeTokenUsage,
+): CodexCumulativeTokenUsage {
+  if (
+    previous === undefined ||
+    current.inputTokens < previous.inputTokens ||
+    current.cachedInputTokens < previous.cachedInputTokens ||
+    current.outputTokens < previous.outputTokens ||
+    current.reasoningTokens < previous.reasoningTokens
+  ) {
+    return last;
+  }
+  return {
+    inputTokens: current.inputTokens - previous.inputTokens,
+    cachedInputTokens: current.cachedInputTokens - previous.cachedInputTokens,
+    ...(current.cacheCreationTokens !== undefined &&
+    previous.cacheCreationTokens !== undefined &&
+    current.cacheCreationTokens >= previous.cacheCreationTokens
+      ? { cacheCreationTokens: current.cacheCreationTokens - previous.cacheCreationTokens }
+      : {}),
+    outputTokens: current.outputTokens - previous.outputTokens,
+    reasoningTokens: current.reasoningTokens - previous.reasoningTokens,
+  };
+}
+
+function accumulateCodexTurnTokenUsage(
+  state: CodexTurnTokenUsageState,
+  turnId: string,
+  usage: EffectCodexSchema.V2ThreadTokenUsageUpdatedNotification["tokenUsage"],
+): void {
+  const current = codexTokenUsageBreakdown(usage.total);
+  if (state.activeTurnId !== turnId) {
+    // The total is thread-wide, so every update moves the baseline. A late
+    // update for a finished turn is not counted toward the live turn.
+    state.baseline = current;
+    return;
+  }
+
+  const accumulator = getCodexTurnAccumulator(state, turnId);
+  const delta = codexTurnTokenUsageDelta(
+    state.baseline,
+    current,
+    codexTokenUsageBreakdown(usage.last),
+  );
+  state.baseline = current;
+
+  if (
+    delta.inputTokens > 0 ||
+    delta.cachedInputTokens > 0 ||
+    delta.outputTokens > 0 ||
+    delta.reasoningTokens > 0
+  ) {
+    accumulator.observed = true;
+  }
+  accumulator.inputTokens += delta.inputTokens;
+  accumulator.cachedInputTokens += delta.cachedInputTokens;
+  accumulator.outputTokens += delta.outputTokens;
+  accumulator.reasoningTokens += delta.reasoningTokens;
+  if (delta.cacheCreationTokens === undefined) {
+    accumulator.cacheCreationTokens = undefined;
+  } else if (accumulator.cacheCreationTokens !== undefined) {
+    accumulator.cacheCreationTokens += delta.cacheCreationTokens;
+  }
+}
+
+function completeCodexTurnTokenUsage(
+  state: CodexTurnTokenUsageState,
+  turnId: string,
+  completed: boolean,
+): TurnTokenUsage {
+  const usage = state.byTurnId.get(turnId);
+  state.byTurnId.delete(turnId);
+  if (state.activeTurnId === turnId) state.activeTurnId = undefined;
+  if (!usage) {
+    return {
+      usageStatus: "unavailable",
+      usageScope: "main_agent",
+      hasSubagents: false,
+    };
+  }
+
+  if (!usage.observed) {
+    return {
+      usageStatus: "unavailable",
+      usageScope: "main_agent",
+      hasSubagents: usage.hasSubagents,
+    };
+  }
+
+  // Codex counts cache reads and writes inside inputTokens. Clamp the
+  // subsets so the record keeps the documented relationships even if a
+  // counter drifts.
+  return {
+    usageStatus: completed ? "complete" : "partial",
+    usageScope: "main_agent",
+    inputTokens: usage.inputTokens,
+    cachedInputTokens: Math.min(usage.inputTokens, usage.cachedInputTokens),
+    ...(usage.cacheCreationTokens !== undefined
+      ? { cacheCreationTokens: Math.min(usage.inputTokens, usage.cacheCreationTokens) }
+      : {}),
+    outputTokens: usage.outputTokens,
+    reasoningTokens: Math.min(usage.outputTokens, usage.reasoningTokens),
+    hasSubagents: usage.hasSubagents,
+  };
+}
+
 function toTurnStatus(
   value: EffectCodexSchema.V2TurnCompletedNotification["turn"]["status"] | "cancelled",
 ): "completed" | "failed" | "cancelled" | "interrupted" {
@@ -603,6 +790,36 @@ function itemDetail(itemType: CanonicalItemType, item: CodexLifecycleItem): stri
     return trimmed;
   }
   return undefined;
+}
+
+// Codex sends `reason` only sometimes, and sends it blank rather than absent
+// often enough to matter, so an empty one must not outrank the paths below.
+function nonEmptyDetail(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
+}
+
+// Keeps one oversized patch from pushing a wall of paths through every consumer
+// of the approval, while still saying how much it covers.
+const MAX_DESCRIBED_FILE_CHANGES = 20;
+
+// An apply-patch approval carries the edited paths as the keys of `fileChanges`.
+// Without them the approval card has nothing to show but its own title — the
+// command-execution branch already falls back to the command for the same reason.
+function describeFileChanges(
+  fileChanges: EffectCodexSchema.ServerRequest__ApplyPatchApprovalParams["fileChanges"] | undefined,
+): string | undefined {
+  if (fileChanges === undefined) return undefined;
+  const entries = Object.entries(fileChanges).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (entries.length === 0) return undefined;
+  const described = entries.slice(0, MAX_DESCRIBED_FILE_CHANGES).map(([path, change]) => {
+    const movePath = change.type === "update" ? change.move_path : undefined;
+    return movePath ? `${change.type} ${path} -> ${movePath}` : `${change.type} ${path}`;
+  });
+  const remaining = entries.length - described.length;
+  return remaining > 0 ? `${described.join("\n")}\n+${remaining} more` : described.join("\n");
 }
 
 function toRequestTypeFromMethod(method: string): CanonicalRequestType {
@@ -1143,7 +1360,9 @@ function mapToRuntimeEvents(
             EffectCodexSchema.ServerRequest__FileChangeRequestApprovalParams,
             event.payload,
           );
-          return payload?.reason ?? undefined;
+          // These params carry no path of their own, only the root the agent
+          // wants to write under.
+          return nonEmptyDetail(payload?.reason) ?? nonEmptyDetail(payload?.grantRoot);
         }
         case "mcpServer/elicitation/request":
           return elicitation?.message;
@@ -1152,7 +1371,11 @@ function mapToRuntimeEvents(
             EffectCodexSchema.ServerRequest__ApplyPatchApprovalParams,
             event.payload,
           );
-          return payload?.reason ?? undefined;
+          return (
+            nonEmptyDetail(payload?.reason) ??
+            describeFileChanges(payload?.fileChanges) ??
+            nonEmptyDetail(payload?.grantRoot)
+          );
         }
         case "execCommandApproval": {
           const payload = readPayload(
@@ -1995,7 +2218,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   options?: CodexAdapterLiveOptions,
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("codex");
-  const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* Effect.service(ServerConfig);
@@ -2051,7 +2273,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(mcpSession
             ? {
                 environment: {
-                  ...(options?.environment ?? process.env),
+                  ...McpProviderSession.withAgentDeviceEnvironment(
+                    options?.environment ?? process.env,
+                    mcpSession,
+                  ),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
                 appServerArgs: [
@@ -2060,9 +2285,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
                 ],
+                mcpCapabilities: mcpSession.capabilities,
               }
             : {}),
         };
+        const turnTokenUsage = makeCodexTurnTokenUsageState();
+        // Codex reports a usage-limit stop as OpenAI's own sentence, which on a
+        // Business workspace blames credits for a window that ran out. The
+        // snapshot naming that window arrives in its own notification, before or
+        // after the stop and often sparse, so keep the session's merged view of
+        // it and read it when a turn fails on the limit.
+        let rateLimits: CodexRateLimitSnapshot | undefined;
         const sessionScope = yield* Scope.make("sequential");
         let sessionScopeTransferred = false;
         yield* Effect.addFinalizer(() =>
@@ -2091,7 +2324,111 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
             yield* writeNativeEvent(event);
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
+            if (event.method === "turn/started" && event.turnId) {
+              if (turnTokenUsage.activeTurnId !== event.turnId) {
+                turnTokenUsage.byTurnId.clear();
+                turnTokenUsage.activeTurnId = event.turnId;
+                getCodexTurnAccumulator(turnTokenUsage, event.turnId);
+              }
+            } else if (event.method === "thread/tokenUsage/updated") {
+              const payload = readPayload(
+                EffectCodexSchema.V2ThreadTokenUsageUpdatedNotification,
+                event.payload,
+              );
+              if (payload) {
+                accumulateCodexTurnTokenUsage(turnTokenUsage, payload.turnId, payload.tokenUsage);
+              }
+            } else if (turnTokenUsage.activeTurnId) {
+              const collabPayload =
+                typeof event.payload === "object" && event.payload !== null
+                  ? (event.payload as Record<string, unknown>)
+                  : undefined;
+              const isCollabSpawn =
+                event.method === "collabAgent/started" ||
+                (event.method === "collabAgent/activity" &&
+                  collabPayload?.activityKind === "started");
+              if (isCollabSpawn && event.turnId === turnTokenUsage.activeTurnId) {
+                getCodexTurnAccumulator(turnTokenUsage, turnTokenUsage.activeTurnId).hasSubagents =
+                  true;
+              }
+            }
+
+            if (event.method === "account/rateLimits/updated") {
+              const limitsPayload = readPayload(
+                EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+                event.payload,
+              );
+              if (limitsPayload) {
+                rateLimits = mergeCodexRateLimits(rateLimits, limitsPayload.rateLimits);
+              }
+            } else if (event.method === "error") {
+              const errorPayload = readPayload(
+                EffectCodexSchema.V2ErrorNotification,
+                event.payload,
+              );
+              // The failed `turn/completed` repeats this sentence and is answered
+              // below; relaying both would show the limit twice.
+              if (errorPayload?.error.codexErrorInfo === "usageLimitExceeded") return;
+            }
+
+            let usageLimitError: ProviderRuntimeEvent | undefined;
+            let usageLimitMessage: string | undefined;
+            if (event.method === "turn/completed") {
+              const completedPayload = readPayload(
+                EffectCodexSchema.V2TurnCompletedNotification,
+                event.payload,
+              );
+              const turnError =
+                completedPayload?.turn.status === "failed"
+                  ? completedPayload.turn.error
+                  : undefined;
+              if (turnError?.codexErrorInfo === "usageLimitExceeded") {
+                usageLimitMessage = codexUsageLimitMessage(rateLimits, event.createdAt);
+                usageLimitError = {
+                  ...runtimeEventBase(event, event.threadId),
+                  type: "runtime.error",
+                  payload: {
+                    message: usageLimitMessage,
+                    class: "provider_error",
+                    ...(turnError.message ? { detail: turnError.message } : {}),
+                  },
+                };
+              }
+            }
+
+            const mappedEvents = mapToRuntimeEvents(event, event.threadId).map((runtimeEvent) => {
+              if (runtimeEvent.type === "turn.completed" && runtimeEvent.turnId) {
+                return {
+                  ...runtimeEvent,
+                  payload: {
+                    ...runtimeEvent.payload,
+                    ...(usageLimitMessage ? { errorMessage: usageLimitMessage } : {}),
+                    tokenUsage: completeCodexTurnTokenUsage(
+                      turnTokenUsage,
+                      String(runtimeEvent.turnId),
+                      runtimeEvent.payload.state === "completed",
+                    ),
+                  },
+                } satisfies ProviderRuntimeEvent;
+              }
+              if (runtimeEvent.type === "turn.aborted" && runtimeEvent.turnId) {
+                return {
+                  ...runtimeEvent,
+                  payload: {
+                    ...runtimeEvent.payload,
+                    tokenUsage: completeCodexTurnTokenUsage(
+                      turnTokenUsage,
+                      String(runtimeEvent.turnId),
+                      false,
+                    ),
+                  },
+                } satisfies ProviderRuntimeEvent;
+              }
+              return runtimeEvent;
+            });
+            const runtimeEvents = usageLimitError
+              ? [usageLimitError, ...mappedEvents]
+              : mappedEvents;
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,
@@ -2129,6 +2466,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           scope: sessionScope,
           runtime,
           eventFiber,
+          turnTokenUsage,
           stopped: false,
         });
         sessionScopeTransferred = true;
@@ -2152,27 +2490,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         detail: `Invalid attachment id '${attachment.id}'.`,
       });
     }
-    const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "turn/start",
-            detail: `Failed to read attachment file: ${cause.message}.`,
-            cause,
-          }),
-      ),
-    );
     return {
-      type: "image" as const,
-      url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+      type: "localImage" as const,
+      path: attachmentPath,
     };
   });
 
   const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    // Codex ingests images only. Anything else would be base64-encoded as an
-    // image and rejected or misread; generic files reach the agent through the
-    // path line ProviderService puts in the prompt.
+    // Codex ingests images only. Anything else would be inlined as an image
+    // and rejected or misread; generic files reach the agent through the path
+    // line ProviderService puts in the prompt. Images are passed by path
+    // instead of base64 so the turn/start request does not scale with file
+    // size; the CLI reads the file itself.
     const codexAttachments = yield* Effect.forEach(
       (input.attachments ?? []).filter((attachment) => attachment.type === "image"),
       (attachment) => resolveAttachment(input, attachment),
@@ -2227,14 +2556,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
-  const compactThread: NonNullable<CodexAdapterShape["compactThread"]> = Effect.fn("compactThread")(
-    function* (threadId) {
-      const session = yield* requireSession(threadId);
-      yield* session.runtime.compactThread.pipe(
-        Effect.mapError((cause) => mapCodexRuntimeError(threadId, "thread/compact/start", cause)),
-      );
-    },
-  );
+  const compactThread = Effect.fn("compactThread")(function* (threadId: ThreadId) {
+    const session = yield* requireSession(threadId);
+    yield* session.runtime.compactThread.pipe(
+      Effect.mapError((cause) => mapCodexRuntimeError(threadId, "thread/compact/start", cause)),
+    );
+  });
 
   const readThread: CodexAdapterShape["readThread"] = (threadId) =>
     requireSession(threadId).pipe(
@@ -2262,7 +2589,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
 
     return requireSession(threadId).pipe(
-      Effect.flatMap((session) => session.runtime.rollbackThread(numTurns)),
+      Effect.flatMap((session) =>
+        session.runtime.rollbackThread(numTurns).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              session.turnTokenUsage.baseline = undefined;
+              session.turnTokenUsage.activeTurnId = undefined;
+              session.turnTokenUsage.byTurnId.clear();
+            }),
+          ),
+        ),
+      ),
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
@@ -2371,7 +2708,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     },
     startSession,
     sendTurn,
-    compactThread,
+    compaction: { type: "native", start: compactThread },
     interruptTurn,
     readThread,
     rollbackThread,
