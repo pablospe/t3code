@@ -83,13 +83,10 @@ export function BoardCardTooltip({
   return (
     <SidebarThreadTooltip
       thread={thread}
-      projectTitle={projectTitle}
+      project={project}
       // The board groups by project, not by the sidebar's project groups, so
       // the card's own title is the name to show.
       projectDisplayName={projectTitle}
-      projectCwd={project?.workspaceRoot ?? null}
-      projectFaviconPath={project?.faviconPath ?? null}
-      projectIcon={project?.projectIcon ?? null}
       environmentLabel={environmentLabel}
       environmentMachine={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
       providerEntry={providerEntry}

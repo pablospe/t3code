@@ -40,6 +40,7 @@ function makeReadModel(input: {
         snoozedAt: null,
         taskDetails: input.taskDetails ?? null,
         workflowPreset: input.workflowPreset ?? null,
+        pullRequests: [],
         deletedAt: null,
         messages: [],
         proposedPlans: [],

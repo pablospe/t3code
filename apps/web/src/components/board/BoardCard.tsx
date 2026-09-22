@@ -17,7 +17,7 @@ import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import type { SidebarThreadSummary } from "~/types";
 
-import { firstValidTimestamp, resolveThreadStatusPill } from "../Sidebar.logic";
+import { resolveThreadStatusPill } from "../Sidebar.logic";
 import { resolveSnoozePresets, snoozeWakeDescription, type SnoozePreset } from "../Sidebar.snooze";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
@@ -34,6 +34,17 @@ const CARD_FRAME_CLASS = "w-full rounded-lg border border-border bg-card px-3 py
 
 const ACTION_BUTTON_CLASS =
   "flex size-6 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground";
+
+/** The first candidate that parses as a date, kept as its ISO string for
+    formatRelativeTimeLabel. */
+function firstValidIsoTimestamp(
+  ...candidates: ReadonlyArray<string | null | undefined>
+): string | null {
+  for (const candidate of candidates) {
+    if (candidate != null && !Number.isNaN(Date.parse(candidate))) return candidate;
+  }
+  return null;
+}
 
 /** A per-task workflow is worth naming in the tooltip: it changes what every
     drop on this card sends. */
@@ -59,7 +70,7 @@ function BoardCardBody({
   onEditTask?: (() => void) | null;
 }) {
   const pill = resolveThreadStatusPill({ thread });
-  const activityAt = firstValidTimestamp(
+  const activityAt = firstValidIsoTimestamp(
     thread.latestUserMessageAt,
     thread.updatedAt,
     thread.createdAt,

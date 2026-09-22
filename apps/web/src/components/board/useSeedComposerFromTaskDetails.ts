@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
-import type { EnvironmentThreadShell, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 
