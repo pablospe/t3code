@@ -57,6 +57,7 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
   readonly restoreFiles?: boolean;
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type SendAttachedMessageInput = CommandInput<"thread.attached.message.send">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -373,6 +374,23 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
   return yield* dispatch({
     ...input,
     type: "thread.session.stop",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+/**
+ * Injects a message into the live external Claude session that an attached
+ * thread mirrors. The only write an attached thread accepts; the server relays
+ * it into the terminal-owned session and the read lane mirrors it back.
+ */
+export const sendAttachedMessage: (input: SendAttachedMessageInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.sendAttachedMessage",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.attached.message.send",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

@@ -21,3 +21,13 @@ export function attachedClaudeThreadId(sessionId: string): ThreadId {
 export function isAttachedSessionThreadId(threadId: string): boolean {
   return threadId.startsWith(ATTACHED_CLAUDE_THREAD_ID_PREFIX);
 }
+
+/**
+ * The Claude CLI sessionId an attached thread mirrors, or null when the id is not
+ * an attached thread. The inverse of {@link attachedClaudeThreadId}.
+ */
+export function attachedClaudeSessionId(threadId: string): string | null {
+  return threadId.startsWith(ATTACHED_CLAUDE_THREAD_ID_PREFIX)
+    ? threadId.slice(ATTACHED_CLAUDE_THREAD_ID_PREFIX.length)
+    : null;
+}

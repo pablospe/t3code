@@ -7,6 +7,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
+  isAttachedSessionThreadId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type EnvironmentId,
@@ -138,6 +139,9 @@ export function useThreadComposerState() {
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
+    reportFailure: false,
+  });
+  const sendAttachedMessage = useAtomCommand(threadEnvironment.sendAttachedMessage, {
     reportFailure: false,
   });
   const pastedTextFileNamesRef = useRef<{ threadKey: string | null; names: Set<string> }>({
@@ -341,6 +345,18 @@ export function useThreadComposerState() {
     const thread = selectedThreadDetail ?? selectedThreadShell;
     const text = draft.text.trim();
     const attachments = draft.attachments;
+    // Attached threads mirror a terminal-owned session. Their one write injects a
+    // message into that session, so dispatch the send command directly instead of
+    // enqueuing a turn in the outbox; the read lane mirrors it back.
+    if (isAttachedSessionThreadId(selectedThreadShell.id)) {
+      if (text.length === 0) return null;
+      clearComposerDraftContent(threadKey);
+      void sendAttachedMessage({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, text },
+      });
+      return null;
+    }
     if (
       composerAttachmentUploadBlockReason({
         environmentId: selectedThreadShell.environmentId,
@@ -483,6 +499,7 @@ export function useThreadComposerState() {
     selectedThreadCreation,
     selectedThreadDetail,
     selectedThreadShell,
+    sendAttachedMessage,
     uploadThreadFeedback,
   ]);
 

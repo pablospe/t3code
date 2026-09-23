@@ -298,10 +298,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => composerStripAttachments(props.draftAttachments),
     [props.draftAttachments],
   );
+  const isAttached = isAttachedSessionThreadId(props.selectedThread.id);
   const showStopAction =
     !hasContent &&
     // An attached session can only be stopped from the terminal that owns it.
-    !isAttachedSessionThreadId(props.selectedThread.id) &&
+    !isAttached &&
     (props.selectedThread.session?.status === "running" ||
       props.selectedThread.session?.status === "starting");
 
@@ -426,7 +427,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     !contextImports[composerOwnerKey] &&
     !voiceInput.blocksSubmission &&
     sendBlockedReason === null &&
-    !modelUnavailable;
+    // Attached threads have no T3-side model to validate against the server.
+    (isAttached || !modelUnavailable);
 
   // Keep the feed inset aligned with the card or compact dictation strip.
   useEffect(() => {
@@ -671,9 +673,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             {selectedProviderStatus.compatibilityAdvisory.message}
           </Text>
         ) : null}
-        {isAttachedSessionThreadId(props.selectedThread.id) ? (
-          <Text className="px-3 py-2 text-xs text-foreground">Read-only terminal session.</Text>
-        ) : modelUnavailable ? (
+        {!isAttached && modelUnavailable ? (
           <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
             <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
           </Pressable>

@@ -75,6 +75,7 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as AttachedSessions from "./attachedSessions/AttachedSessions.ts";
+import * as AttachedSessionSender from "./attachedSessions/AttachedSessionSender.ts";
 import * as ClaudeAgentsRoster from "./attachedSessions/ClaudeAgentsRoster.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -251,17 +252,16 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(StorageCleanup.layer),
-  Layer.provideMerge(
-    AttachedSessions.layer.pipe(
-      Layer.provide(ClaudeAgentsRoster.layer.pipe(Layer.provide(ProcessRunner.layer))),
-    ),
-  ),
+  Layer.provideMerge(AttachedSessions.layer),
+  Layer.provideMerge(AttachedSessionSender.layer),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ThreadSettlementReactor.layer),
   Layer.provideMerge(PullRequestSyncReactor.layer),
   Layer.provideMerge(ThreadPullRequestReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
+  // Shared by the attached-session mirror and sender for sessionId → name lookup.
+  Layer.provideMerge(ClaudeAgentsRoster.layer.pipe(Layer.provide(ProcessRunner.layer))),
 );
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(

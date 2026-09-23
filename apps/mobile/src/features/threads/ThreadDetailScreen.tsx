@@ -1085,11 +1085,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   // them against a thread id the server may still reject
                   // would strand them in the outbox.
                   sendBlockedReason={
-                    isAttachedSessionThreadId(props.selectedThread.id)
-                      ? "Reply in the terminal that owns this session."
-                      : props.creationState?.kind === "preparing"
-                        ? "Starting the task…"
-                        : null
+                    props.creationState?.kind === "preparing" ? "Starting the task…" : null
                   }
                   bottomInset={composerBottomInset}
                   onChangeDraftMessage={props.onChangeDraftMessage}

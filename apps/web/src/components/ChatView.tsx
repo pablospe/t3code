@@ -40,6 +40,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderInteractionMode,
   ProviderDriverKind,
+  isAttachedSessionThreadId,
   resolveEnvironmentMachineKind,
   RuntimeMode,
   TerminalOpenInput,
@@ -1511,6 +1512,9 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const sendAttachedMessage = useAtomCommand(threadEnvironment.sendAttachedMessage, {
+    reportFailure: false,
+  });
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -7293,6 +7297,21 @@ export default function ChatView(props: ChatViewProps) {
     queuedMessage?: QueuedComposerMessage,
   ) => {
     e?.preventDefault();
+    // Attached threads mirror a terminal-owned session. The one write they take
+    // is injecting a message into that session, so route the draft to the send
+    // command and skip all of the provider/turn machinery below.
+    if (activeThread && isAttachedSessionThreadId(activeThread.id)) {
+      const attachedText = promptRef.current.trim();
+      if (attachedText.length === 0) return;
+      promptRef.current = "";
+      setComposerDraftPrompt(composerDraftTarget, "");
+      composerRef.current?.resetCursorState();
+      void sendAttachedMessage({
+        environmentId: activeThread.environmentId,
+        input: { threadId: activeThread.id, text: attachedText },
+      });
+      return;
+    }
     // Typed out in full rather than picked from the menu. Attachments or contexts
     // mean the user is sending a prompt, so those go through as usual.
     if (

@@ -7,6 +7,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  ThreadId,
   attachedClaudeThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -160,6 +161,46 @@ it.layer(NodeServices.layer)("attached session threads", (it) => {
 
       expect([appended].flat()[0]?.type).toBe("thread.message-sent");
       expect([archived].flat()[0]?.type).toBe("thread.archived");
+    }),
+  );
+
+  it.effect("accepts an attached message send and records intent without content", () =>
+    Effect.gen(function* () {
+      const readModel = yield* attachedReadModel;
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.attached.message.send",
+          commandId: CommandId.make("command-attached-send"),
+          threadId,
+          text: "ship it",
+          createdAt,
+        },
+        readModel,
+      });
+      const events = [decided].flat();
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type).toBe("thread.attached-message-send-requested");
+      expect(events[0]?.payload).toMatchObject({ threadId, text: "ship it" });
+    }),
+  );
+
+  it.effect("rejects an attached message send to a thread that is not attached", () =>
+    Effect.gen(function* () {
+      const readModel = yield* attachedReadModel;
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.attached.message.send",
+            commandId: CommandId.make("command-nonattached-send"),
+            threadId: ThreadId.make("regular-thread"),
+            text: "nope",
+            createdAt,
+          },
+          readModel,
+        }),
+      );
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      expect(error.message).toContain("not an attached terminal session");
     }),
   );
 });

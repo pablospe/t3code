@@ -1890,6 +1890,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.attached.message.send": {
+      // The only write an attached thread accepts. It records intent to inject a
+      // message into the terminal-owned Claude session; the sender reactor
+      // performs the injection and the read lane mirrors the message back, so no
+      // content is produced here. Every other write stays rejected above.
+      if (!isAttachedSessionThreadId(command.threadId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not an attached terminal session.`,
+        });
+      }
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.attached-message-send-requested",
+        payload: {
+          threadId: command.threadId,
+          text: command.text,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       const thread = yield* requireThread({
         readModel,

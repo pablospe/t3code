@@ -46,6 +46,21 @@ const decodeTranscriptRecord = Schema.decodeUnknownOption(Schema.fromJsonString(
 
 const MAX_TOOL_DETAIL_CHARS = 400;
 
+/**
+ * A message injected into a session from another session — including one T3
+ * sends on the user's behalf — is recorded in the target transcript wrapped in a
+ * `<cross-session-message from="uds:…" from-name="…" from-mode="…">` tag. Strip
+ * the wrapper so the mirrored message shows the clean text the sender typed.
+ */
+const CROSS_SESSION_MESSAGE_OPEN = /^<cross-session-message\b[^>]*>/;
+const CROSS_SESSION_MESSAGE_CLOSE = /<\/cross-session-message>$/;
+
+function stripCrossSessionEnvelope(text: string): string {
+  const withoutOpen = text.replace(CROSS_SESSION_MESSAGE_OPEN, "");
+  if (withoutOpen === text) return text;
+  return withoutOpen.replace(CROSS_SESSION_MESSAGE_CLOSE, "").trim();
+}
+
 /** An image pasted into the terminal prompt, still base64 encoded. */
 export interface AttachedTranscriptImage {
   readonly mediaType: string;
@@ -120,10 +135,13 @@ export function parseAttachedTranscriptLine(
   const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
   const entries: Array<AttachedTranscriptEntry> = [];
 
-  const text = blocks
+  const joinedText = blocks
     .flatMap((block) => (block.type === "text" && block.text !== undefined ? [block.text] : []))
     .join("\n")
     .trim();
+  // A message T3 injected (or any cross-session message) is mirrored back
+  // wrapped in a `<cross-session-message …>` tag. Show the clean text instead.
+  const text = role === "user" ? stripCrossSessionEnvelope(joinedText) : joinedText;
   const images =
     role === "user"
       ? blocks.flatMap((block): ReadonlyArray<AttachedTranscriptImage> => {

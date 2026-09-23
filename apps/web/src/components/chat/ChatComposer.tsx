@@ -941,7 +941,6 @@ import {
   PencilRulerIcon,
   PlayIcon,
   ShieldIcon,
-  TerminalIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
@@ -1896,8 +1895,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const selectedInstanceId =
     selectedProviderEntry?.instanceId ?? NO_PROVIDER_MODEL_SELECTION.instanceId;
+  // Attached threads mirror a terminal-owned session. They deliberately resolve
+  // no T3 provider (their send goes to that session, not through a provider), so
+  // the "no provider / environment disconnected" gating must not apply to them,
+  // or the composer's send affordance and Enter-to-send stay permanently off.
+  const isAttachedSession = activeThreadId !== null && isAttachedSessionThreadId(activeThreadId);
   const noProviderAvailable =
-    selectedProviderEntry === undefined && multipleModelSelections === null;
+    !isAttachedSession && selectedProviderEntry === undefined && multipleModelSelections === null;
   // Before the catalog arrives, every thread resolves to "no provider". Send
   // stays blocked either way; only the chrome waits, keeping the picker with
   // the thread's own selection instead of swapping in the setup button and
@@ -1931,16 +1935,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderEntry?.snapshot,
     selectedModel,
   );
-  // Attached threads mirror a session that its terminal owns, so T3 never sends to them.
-  const isAttachedSession = activeThreadId !== null && isAttachedSessionThreadId(activeThreadId);
-  const sendDisabledReason =
-    (isAttachedSession ? "Reply in the terminal that owns this session." : null) ??
-    externalSendDisabledReason ??
-    (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
-    (activePendingProgress
-      ? attachmentBlockReason
-      : (attachmentBlockReason ??
-        (multipleModelSelections === null ? providerSendBlockReason : null)));
+  const sendDisabledReason = isAttachedSession
+    ? // Attached threads inject the message into their terminal-owned session, so
+      // the normal provider/model send gating does not apply; the send button is
+      // still gated on having text to send.
+      null
+    : (externalSendDisabledReason ??
+      (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
+      (activePendingProgress
+        ? attachmentBlockReason
+        : (attachmentBlockReason ??
+          (multipleModelSelections === null ? providerSendBlockReason : null))));
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
@@ -4992,15 +4997,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const hiddenRestingBlockIds = restingBlockDefs
     .slice(restingBlockDefs.length - restingHiddenBlockCount)
     .map((def) => def.id);
-  const composerControls = isAttachedSession ? (
-    <span
-      data-chat-attached-session="true"
-      className="flex shrink-0 items-center gap-2 px-2 text-sm text-secondary-label sm:px-3"
-    >
-      <TerminalIcon className="size-4" />
-      Read-only terminal session
-    </span>
-  ) : showProviderUnavailable ? (
+  // Attached threads have no T3-side provider or model to choose; the resting
+  // controls strip stays empty rather than showing a special affordance.
+  const composerControls = isAttachedSession ? null : showProviderUnavailable ? (
     <ComposerControl
       type="button"
       disabled={!providerSetupInstanceId}
@@ -6894,7 +6893,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPaste={onComposerPaste}
                     placeholder={
                       isAttachedSession
-                        ? "Reply in the terminal that owns this session"
+                        ? "Send a message to this terminal session"
                         : isComposerApprovalState
                           ? "Resolve this approval request to continue"
                           : activePendingProgress
@@ -6912,7 +6911,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                     : "Ask anything, @tag files/folders, $use skills, or / for commands"
                     }
                     disabled={
-                      isAttachedSession ||
                       isConnecting ||
                       isComposerApprovalState ||
                       projectSelectionRequired ||
@@ -7044,11 +7042,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     promptHasText={prompt.trim().length > 0}
                     isSendBusy={isSendBusy}
                     sendDisabledReason={sendDisabledReason}
-                    isConnecting={isConnecting}
+                    isConnecting={isConnecting && !isAttachedSession}
                     isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
-                      noProviderAvailable ||
-                      projectSelectionRequired
+                      !isAttachedSession &&
+                      (environmentUnavailable !== null ||
+                        noProviderAvailable ||
+                        projectSelectionRequired)
                     }
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}

@@ -81,6 +81,68 @@ describe("parseAttachedTranscriptLine", () => {
       }),
     ).toEqual([{ kind: "tool-completed", toolUseId: "tool-1", failed: true, createdAt: fallback }]);
   });
+
+  it("strips the cross-session-message wrapper T3 injects around a user message", () => {
+    expect(
+      parse({
+        type: "user",
+        uuid: "u",
+        message: {
+          content:
+            '<cross-session-message from="uds:/run/user/1000/cc-socks/42.sock" from-name="T3" from-mode="bypassPermissions">ship it please',
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        uuid: "u",
+        text: "ship it please",
+        images: [],
+        createdAt: fallback,
+      },
+    ]);
+  });
+
+  it("strips a cross-session wrapper that carries a closing tag", () => {
+    expect(
+      parse({
+        type: "user",
+        uuid: "u2",
+        message: {
+          content: '<cross-session-message from="uds:/x.sock">hello there</cross-session-message>',
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        uuid: "u2",
+        text: "hello there",
+        images: [],
+        createdAt: fallback,
+      },
+    ]);
+  });
+
+  it("leaves an ordinary user message that only mentions the tag name intact", () => {
+    expect(
+      parse({
+        type: "user",
+        uuid: "u3",
+        message: { content: "what is a cross-session-message?" },
+      }),
+    ).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        uuid: "u3",
+        text: "what is a cross-session-message?",
+        images: [],
+        createdAt: fallback,
+      },
+    ]);
+  });
 });
 
 const cursorFileWithOneBadEntry = JSON.stringify({

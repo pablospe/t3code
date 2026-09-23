@@ -1411,6 +1411,22 @@ const ThreadSessionStopCommand = Schema.Struct({
   onlyIfSettled: Schema.optional(Schema.Boolean),
 });
 
+/**
+ * Injects a message into the live external Claude CLI session that an attached
+ * thread mirrors, as if a teammate messaged it. This is the only write allowed
+ * on an attached thread — the terminal stays the session's owner. The server
+ * performs the injection out of band (an in-process Agent SDK send) and the read
+ * lane mirrors the message back, so the command records intent only and carries
+ * no content event.
+ */
+const ThreadAttachedMessageSendCommand = Schema.Struct({
+  type: Schema.Literal("thread.attached.message.send"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  text: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -1440,6 +1456,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadConversationRevertCommand,
   ThreadSessionStopCommand,
+  ThreadAttachedMessageSendCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1473,6 +1490,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadConversationRevertCommand,
   ThreadSessionStopCommand,
+  ThreadAttachedMessageSendCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1705,6 +1723,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "thread.attached-message-send-requested",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1978,6 +1997,18 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
 });
 
 /**
+ * Records that a client asked T3 to inject a message into the external Claude
+ * CLI session mirrored by an attached thread. Consumed by the sender reactor,
+ * which performs the injection; the read lane mirrors the message back as the
+ * thread's content, so this event carries no content of its own.
+ */
+export const ThreadAttachedMessageSendRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  text: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+/**
  * Which client connection dispatched the command that produced an event.
  * Stamped by the orchestration engine on client-dispatched commands; absent on
  * provider/server-originated events and on commands from clients too old to
@@ -2178,6 +2209,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.attached-message-send-requested"),
+    payload: ThreadAttachedMessageSendRequestedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

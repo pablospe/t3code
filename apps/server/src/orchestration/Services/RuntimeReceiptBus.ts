@@ -49,10 +49,28 @@ export const TurnProcessingQuiescedReceipt = Schema.Struct({
 });
 export type TurnProcessingQuiescedReceipt = typeof TurnProcessingQuiescedReceipt.Type;
 
+/**
+ * Reports the outcome of a T3-initiated message injection into an external
+ * Claude CLI session mirrored by an attached thread. Published by the attached
+ * session sender so tests (and harnesses) can await the async send without
+ * inferring it from mirrored transcript state. `failed` includes a delivery held
+ * by the recipient's permission mode, since T3 cannot confirm receipt.
+ */
+export const AttachedMessageSendSettledReceipt = Schema.Struct({
+  type: Schema.Literal("attached.message.send.settled"),
+  threadId: ThreadId,
+  sessionId: Schema.String,
+  outcome: Schema.Literals(["delivered", "failed"]),
+  detail: Schema.optional(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type AttachedMessageSendSettledReceipt = typeof AttachedMessageSendSettledReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
+  AttachedMessageSendSettledReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 
