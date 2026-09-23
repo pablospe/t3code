@@ -38,6 +38,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as AttachedSessions from "./AttachedSessions.ts";
 import {
   ClaudeAgentsRoster,
+  isClaudeMemObserverSession,
   type ClaudeAgentsRosterEntry,
   type ClaudeAgentsRosterSnapshot,
 } from "./ClaudeAgentsRoster.ts";
@@ -621,5 +622,98 @@ describe("AttachedSessions", () => {
         yield* service.close;
       }),
     );
+  });
+
+  it.effect("does not mirror claude-mem observer sessions", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.setRoster({ cwd: "/tmp/home/.claude-mem/observer-sessions/observer-1" });
+        const service = yield* harness.startService;
+        yield* service.sweep;
+        expect(yield* harness.thread).toBeUndefined();
+        yield* service.close;
+      }),
+    );
+  });
+
+  it.effect("settles a mirrored thread when its session leaves the roster", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Alive"));
+        harness.setRoster({ status: "busy" });
+        const service = yield* harness.startService;
+        yield* service.sweep;
+        expect((yield* harness.shell)?.session?.status).toBe("running");
+        expect((yield* harness.shell)?.settledOverride).not.toBe("settled");
+
+        // The session leaves the roster: its thread must drop out of the active list.
+        harness.setRoster(null);
+        yield* service.sweep;
+        expect((yield* harness.shell)?.session?.status).toBe("stopped");
+        expect((yield* harness.shell)?.settledOverride).toBe("settled");
+        yield* service.close;
+      }),
+    );
+  });
+
+  it.effect("keeps a live session's thread in the active list across reconciles", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Alive"));
+        harness.setRoster({ status: "busy" });
+        const service = yield* harness.startService;
+        // Repeated reconciles while the session stays live must not settle it.
+        yield* service.sweep;
+        yield* service.sweep;
+        yield* service.sweep;
+        expect((yield* harness.shell)?.settledOverride).not.toBe("settled");
+        expect((yield* harness.shell)?.session?.status).toBe("running");
+        yield* service.close;
+      }),
+    );
+  });
+
+  it.effect("does not resurrect a settled thread when its sessionId reappears", () => {
+    const harness = createHarness();
+    return harness.run(
+      Effect.gen(function* () {
+        harness.append(userRecord("u1", "Alive"));
+        harness.setRoster({ status: "busy" });
+        const service = yield* harness.startService;
+        yield* service.sweep;
+        harness.setRoster(null);
+        yield* service.sweep;
+        expect((yield* harness.shell)?.settledOverride).toBe("settled");
+
+        // The sessionId reappears: ended-retention keeps the thread settled and
+        // does not recreate or reactivate it, and it is not re-settled either.
+        harness.setRoster({ status: "busy" });
+        yield* service.sweep;
+        const reappeared = yield* harness.shell;
+        expect(reappeared).toBeDefined();
+        expect(reappeared?.settledOverride).toBe("settled");
+        yield* service.close;
+      }),
+    );
+  });
+});
+
+describe("isClaudeMemObserverSession", () => {
+  it("excludes sessions whose cwd sits inside a .claude-mem directory", () => {
+    expect(isClaudeMemObserverSession("/home/pablo/.claude-mem/observer-sessions/abc123")).toBe(
+      true,
+    );
+    expect(isClaudeMemObserverSession("/Users/x/.claude-mem/observer-sessions/y")).toBe(true);
+  });
+
+  it("includes normal worktree and project cwds", () => {
+    expect(isClaudeMemObserverSession("/home/pablo/code/t3code/.worktrees/kanban-board")).toBe(
+      false,
+    );
+    // A similarly named directory is not the claude-mem data dir.
+    expect(isClaudeMemObserverSession("/home/pablo/claude-mem-notes")).toBe(false);
   });
 });

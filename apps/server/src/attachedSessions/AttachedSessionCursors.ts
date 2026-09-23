@@ -24,6 +24,10 @@ const AttachedSessionCursor = Schema.Struct({
     Schema.Struct({ name: Schema.String, detail: Schema.NullOr(Schema.String) }),
   ),
   endedAt: Schema.NullOr(Schema.String),
+  /** The thread was settled out of the active list because its session left the
+      roster. Persisted so a restart does not re-settle the whole stale backlog.
+      Optional so cursor files written before this field still decode. */
+  settled: Schema.optionalKey(Schema.Boolean),
 });
 export type AttachedSessionCursor = typeof AttachedSessionCursor.Type;
 

@@ -74,6 +74,19 @@ export function parseClaudeAgentsRoster(
   );
 }
 
+/**
+ * claude-mem spawns ephemeral interactive "observer" sessions constantly (a new
+ * one roughly every minute), whose cwd lives inside its data directory
+ * (`~/.claude-mem/observer-sessions/…`). They are `kind:"interactive"` like a
+ * real session, so `kind` cannot tell them apart, but they are never agents the
+ * user drives and must not be mirrored. Their cwd always sits inside a
+ * `.claude-mem` directory, wherever the user's home resolves, which is the
+ * robust signal used to skip them.
+ */
+export function isClaudeMemObserverSession(cwd: string): boolean {
+  return cwd.split(/[/\\]+/).some((segment) => segment === ".claude-mem");
+}
+
 export class ClaudeAgentsRoster extends Context.Service<
   ClaudeAgentsRoster,
   {

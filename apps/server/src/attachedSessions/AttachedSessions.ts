@@ -58,7 +58,11 @@ import {
   loadAttachedSessionCursors,
   saveAttachedSessionCursors,
 } from "./AttachedSessionCursors.ts";
-import { ClaudeAgentsRoster, type ClaudeAgentsRosterEntry } from "./ClaudeAgentsRoster.ts";
+import {
+  ClaudeAgentsRoster,
+  isClaudeMemObserverSession,
+  type ClaudeAgentsRosterEntry,
+} from "./ClaudeAgentsRoster.ts";
 
 const DEFAULT_ROSTER_INTERVAL_MS = 5_000;
 const DEFAULT_TAIL_INTERVAL_MS = 1_500;
@@ -103,6 +107,9 @@ interface TrackedSession {
    * offset stays where it was, and an unarchived thread catches up from there.
    */
   paused: boolean;
+  /** The thread was settled out of the active list because its session left the
+      roster. Cleared if the session becomes live again. */
+  settled: boolean;
 }
 
 const SESSION_STATUSES: ReadonlySet<string> = new Set<OrchestrationSessionStatus>([
@@ -163,6 +170,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
             waitRequestId: cursor.waitRequestId,
             endedAt: cursor.endedAt,
             paused: false,
+            settled: cursor.settled ?? false,
           },
         ]),
       );
@@ -183,6 +191,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
               waitRequestId: session.waitRequestId,
               toolCalls: Object.fromEntries(session.toolCalls),
               endedAt: session.endedAt,
+              settled: session.settled,
             },
           ]),
         ),
@@ -404,6 +413,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         waitRequestId: null,
         endedAt: null,
         paused: false,
+        settled: false,
       };
       all.set(entry.sessionId, session);
       cursorsDirty = true;
@@ -567,6 +577,21 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       ),
     );
 
+    /** Drops a thread out of the active list once its session has left the roster. */
+    const settleThread = Effect.fn("AttachedSessions.settleThread")(function* (
+      session: TrackedSession,
+    ) {
+      yield* dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make(
+          `attached:${session.sessionId}:settle:${session.endedAt ?? "ended"}`,
+        ),
+        threadId: session.threadId,
+      });
+      session.settled = true;
+      cursorsDirty = true;
+    });
+
     const rosterSweep = Effect.gen(function* () {
       const all = yield* loadSessions;
       const running = () => [...all.values()].filter((session) => session.endedAt === null);
@@ -585,11 +610,19 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       const owned = yield* ownedSessionIds;
       const live = new Map(
         snapshot.value.sessions
-          .filter((entry) => !owned.has(entry.sessionId))
+          // Skip sessions T3 runs itself and claude-mem's ephemeral observer
+          // sessions; neither is a real agent the user drives.
+          .filter((entry) => !owned.has(entry.sessionId) && !isClaudeMemObserverSession(entry.cwd))
           .map((entry) => [entry.sessionId, entry]),
       );
       for (const session of running()) {
         if (!live.has(session.sessionId)) yield* end(session);
+      }
+      // A session that has left the live roster is no longer a running agent, so
+      // settle its thread out of the active list. Guarded by `settled` so the
+      // stale backlog clears once and is never re-settled every sweep.
+      for (const session of all.values()) {
+        if (!live.has(session.sessionId) && !session.settled) yield* settleThread(session);
       }
       for (const entry of live.values()) {
         const known = all.get(entry.sessionId);
@@ -601,6 +634,9 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         // Archived and deleted threads are both invisible here, and both pause the mirror.
         session.paused = Option.isNone(yield* query.getThreadShellById(session.threadId));
         if (session.paused) continue;
+        // Ended-retention: once a session has been settled out of the active
+        // list, a reappearing sessionId does not resurrect its thread.
+        if (session.settled) continue;
         yield* applyStatus(session, {
           status: attachedSessionStatus(entry.status),
           waiting: entry.status === "waiting",
