@@ -384,7 +384,7 @@ function BoardCardImpl({
                 >
                   <ClockIcon className="size-3.5" />
                 </PopoverTrigger>
-                <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
+                <PopoverPopup side="bottom" align="end" width="sm" padding="compact">
                   {snoozePresets.map((preset) => (
                     <button
                       key={preset.id}
