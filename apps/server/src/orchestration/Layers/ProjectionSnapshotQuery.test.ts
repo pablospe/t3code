@@ -491,6 +491,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           taskDetails: "Ship the board",
           workflowPreset: "openspec",
           activeOrderKey: "hq",
+          autoSettleDisabledAt: null,
           titleRegeneration: null,
           titleState: null,
           deletedAt: null,
@@ -619,6 +620,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           taskDetails: "Ship the board",
           workflowPreset: "openspec",
           activeOrderKey: "hq",
+          autoSettleDisabledAt: null,
           titleRegeneration: null,
           titleState: null,
           session: {

@@ -493,10 +493,10 @@ export const ChatHeader = memo(function ChatHeader({
         className={cn(
           "flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3",
           // Reserve three panel toggles (board, terminal, right panel) plus their
-          // 4px gaps and 1px edge inset. The page header adds 8px more right
-          // padding at sm.
-          rightPanelOpen ? "pr-0" : "pr-[calc(--spacing(27)+1px)] sm:pr-[calc(--spacing(22)+1px)]",
-          "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:motion-safe:ease-out",
+          // 4px gaps and 1px edge inset.
+          // The page header adds 8px more right padding at sm.
+          rightPanelOpen ? "pr-0" : "pr-27.25 sm:pr-22.25",
+          "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
         )}
       >
         <Menu open={actionsCollapsed && actionsOpen} onOpenChange={setActionsOpen}>
