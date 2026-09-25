@@ -123,8 +123,8 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
     `,
   });
 
-  const hasActionableByThreadId = Effect.fn(
-    "ProjectionThreadProposedPlanRepository.hasActionableByThreadId",
+  const getActionableIdByThreadId = Effect.fn(
+    "ProjectionThreadProposedPlanRepository.getActionableIdByThreadId",
   )(
     function* (input: HasActionableProjectionThreadProposedPlanInput) {
       const candidates = yield* listPlanStatusCandidates(input);
@@ -140,12 +140,17 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
           selected = candidate;
         }
       }
-      return selected?.implementedAt === null;
+      return selected !== undefined && selected.implementedAt === null ? selected.planId : null;
     },
     Effect.mapError(
-      toPersistenceSqlError("ProjectionThreadProposedPlanRepository.hasActionableByThreadId:query"),
+      toPersistenceSqlError(
+        "ProjectionThreadProposedPlanRepository.getActionableIdByThreadId:query",
+      ),
     ),
   );
+
+  const hasActionableByThreadId: ProjectionThreadProposedPlanRepositoryShape["hasActionableByThreadId"] =
+    (input) => getActionableIdByThreadId(input).pipe(Effect.map((planId) => planId !== null));
 
   const upsert: ProjectionThreadProposedPlanRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadProposedPlanRow(row).pipe(
@@ -179,6 +184,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
     upsert,
     listByThreadId,
     hasActionableByThreadId,
+    getActionableIdByThreadId,
     getByPlanId,
     deleteByThreadId,
   } satisfies ProjectionThreadProposedPlanRepositoryShape;

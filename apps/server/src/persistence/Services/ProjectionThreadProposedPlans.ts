@@ -63,6 +63,12 @@ export interface ProjectionThreadProposedPlanRepositoryShape {
   readonly hasActionableByThreadId: (
     input: HasActionableProjectionThreadProposedPlanInput,
   ) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  /** The plan the thread is still waiting on, or null when nothing is
+      actionable. Shells carry the id so a client can start the implementation
+      turn against it without loading the detail. */
+  readonly getActionableIdByThreadId: (
+    input: HasActionableProjectionThreadProposedPlanInput,
+  ) => Effect.Effect<OrchestrationProposedPlanId | null, ProjectionRepositoryError>;
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadProposedPlansInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

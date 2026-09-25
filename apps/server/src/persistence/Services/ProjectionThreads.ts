@@ -49,6 +49,8 @@ export const ProjectionThread = Schema.Struct({
   snoozedAt: Schema.NullOr(IsoDateTime),
   pinnedAt: Schema.NullOr(IsoDateTime),
   pinOrderKey: Schema.optional(Schema.NullOr(Schema.String)),
+  taskDetails: Schema.optional(Schema.NullOr(Schema.String)),
+  workflowPreset: Schema.optional(Schema.NullOr(Schema.String)),
   activeOrderKey: Schema.optional(Schema.NullOr(Schema.String)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
@@ -57,6 +59,7 @@ export const ProjectionThread = Schema.Struct({
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
+  actionableProposedPlanId: Schema.optional(Schema.NullOr(Schema.String)),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

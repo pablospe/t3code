@@ -41,6 +41,7 @@ node_modules/
 *.log
 .env*
 !.env.example
+.playwright-cli/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/

@@ -586,6 +586,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
+          task_details AS "taskDetails",
+          workflow_preset AS "workflowPreset",
           active_order_key AS "activeOrderKey",
           auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
@@ -594,6 +596,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          actionable_proposed_plan_id AS "actionableProposedPlanId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -628,6 +631,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
+          task_details AS "taskDetails",
+          workflow_preset AS "workflowPreset",
           active_order_key AS "activeOrderKey",
           auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
@@ -636,6 +641,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          actionable_proposed_plan_id AS "actionableProposedPlanId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -702,6 +708,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
+          task_details AS "taskDetails",
+          workflow_preset AS "workflowPreset",
           active_order_key AS "activeOrderKey",
           auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
@@ -710,6 +718,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          actionable_proposed_plan_id AS "actionableProposedPlanId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -1268,6 +1277,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
+          task_details AS "taskDetails",
+          workflow_preset AS "workflowPreset",
           active_order_key AS "activeOrderKey",
           auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
@@ -1276,6 +1287,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          actionable_proposed_plan_id AS "actionableProposedPlanId",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -2344,6 +2356,8 @@ pending_approval_requests AS (
                 snoozedAt: row.snoozedAt,
                 pinnedAt: row.pinnedAt,
                 pinOrderKey: row.pinOrderKey ?? null,
+                taskDetails: row.taskDetails ?? null,
+                workflowPreset: row.workflowPreset ?? null,
                 activeOrderKey: row.activeOrderKey ?? null,
                 autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                 titleRegeneration: mapTitleRegeneration(row),
@@ -2590,6 +2604,8 @@ pending_approval_requests AS (
                   snoozedAt: row.snoozedAt,
                   pinnedAt: row.pinnedAt,
                   pinOrderKey: row.pinOrderKey ?? null,
+                  taskDetails: row.taskDetails ?? null,
+                  workflowPreset: row.workflowPreset ?? null,
                   activeOrderKey: row.activeOrderKey ?? null,
                   autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
@@ -2748,6 +2764,8 @@ pending_approval_requests AS (
                         pinnedAt: row.pinnedAt,
                         pinOrderKey: row.pinOrderKey ?? null,
                         activeOrderKey: row.activeOrderKey ?? null,
+                        taskDetails: row.taskDetails ?? null,
+                        workflowPreset: row.workflowPreset ?? null,
                         autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                         titleRegeneration: mapTitleRegeneration(row),
                         titleState: row.titleState,
@@ -2756,6 +2774,7 @@ pending_approval_requests AS (
                         hasPendingApprovals: row.pendingApprovalCount > 0,
                         hasPendingUserInput: row.pendingUserInputCount > 0,
                         hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                        actionableProposedPlanId: row.actionableProposedPlanId ?? null,
                         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                           row.threadId,
                         ),
@@ -2912,6 +2931,8 @@ pending_approval_requests AS (
                   pinnedAt: row.pinnedAt,
                   pinOrderKey: row.pinOrderKey ?? null,
                   activeOrderKey: row.activeOrderKey ?? null,
+                  taskDetails: row.taskDetails ?? null,
+                  workflowPreset: row.workflowPreset ?? null,
                   autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
                   titleState: row.titleState,
@@ -2920,6 +2941,7 @@ pending_approval_requests AS (
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                  actionableProposedPlanId: row.actionableProposedPlanId ?? null,
                   backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                     row.threadId,
                   ),
@@ -3268,6 +3290,8 @@ pending_approval_requests AS (
         snoozedAt: threadRow.value.snoozedAt,
         pinnedAt: threadRow.value.pinnedAt,
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
+        taskDetails: threadRow.value.taskDetails ?? null,
+        workflowPreset: threadRow.value.workflowPreset ?? null,
         activeOrderKey: threadRow.value.activeOrderKey ?? null,
         autoSettleDisabledAt: threadRow.value.autoSettleDisabledAt ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
@@ -3277,6 +3301,7 @@ pending_approval_requests AS (
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
+        actionableProposedPlanId: threadRow.value.actionableProposedPlanId ?? null,
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,
         ),
@@ -3570,6 +3595,8 @@ pending_approval_requests AS (
         snoozedAt: threadRow.value.snoozedAt,
         pinnedAt: threadRow.value.pinnedAt,
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
+        taskDetails: threadRow.value.taskDetails ?? null,
+        workflowPreset: threadRow.value.workflowPreset ?? null,
         activeOrderKey: threadRow.value.activeOrderKey ?? null,
         autoSettleDisabledAt: threadRow.value.autoSettleDisabledAt ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),

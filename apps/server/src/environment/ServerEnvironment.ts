@@ -240,6 +240,7 @@ export const make = Effect.gen(function* () {
       threadPullRequests: true,
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
+      threadTaskDetails: true,
       environmentIcon: true,
       projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),

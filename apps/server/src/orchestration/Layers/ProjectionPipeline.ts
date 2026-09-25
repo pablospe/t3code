@@ -579,10 +579,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         return;
       }
 
-      const [latestUserMessageAt, hasActionableProposedPlan, activities, pendingApprovalCount] =
+      const [latestUserMessageAt, actionableProposedPlanId, activities, pendingApprovalCount] =
         yield* Effect.all([
           projectionThreadMessageRepository.getLatestUserMessageAt({ threadId }),
-          projectionThreadProposedPlanRepository.hasActionableByThreadId({
+          projectionThreadProposedPlanRepository.getActionableIdByThreadId({
             threadId,
             latestTurnId: existingRow.value.latestTurnId,
           }),
@@ -597,7 +597,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         latestUserMessageAt,
         pendingApprovalCount,
         pendingUserInputCount,
-        hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
+        hasActionableProposedPlan: actionableProposedPlanId !== null ? 1 : 0,
+        actionableProposedPlanId,
       });
     });
 
@@ -632,6 +633,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             snoozedAt: null,
             pinnedAt: null,
             pinOrderKey: null,
+            taskDetails: null,
+            workflowPreset: null,
             activeOrderKey: null,
             autoSettleDisabledAt: null,
             titleRegenerationRequestId: null,
@@ -640,6 +643,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
+            actionableProposedPlanId: null,
             deletedAt: null,
           });
           return;
@@ -844,6 +848,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.linkedPullRequest !== undefined
               ? { linkedPullRequest: event.payload.linkedPullRequest }
+              : {}),
+            ...(event.payload.taskDetails !== undefined
+              ? { taskDetails: event.payload.taskDetails }
+              : {}),
+            ...(event.payload.workflowPreset !== undefined
+              ? { workflowPreset: event.payload.workflowPreset }
               : {}),
             ...(event.payload.branchPullRequest !== undefined
               ? { branchPullRequest: event.payload.branchPullRequest }

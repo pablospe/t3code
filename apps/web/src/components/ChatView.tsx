@@ -332,6 +332,7 @@ import {
 } from "../queuedMessageStore";
 import { type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
+import { useBoardDrawerStore } from "../boardDrawerStore";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnectDelay";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -374,6 +375,8 @@ import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
 import { resolveComposerTimelineInset, resolveScrollToEndClearance } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
+import { BoardDrawer } from "./board/BoardDrawer";
+import { useSeedComposerFromTaskDetails } from "./board/useSeedComposerFromTaskDetails";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1566,6 +1569,12 @@ export default function ChatView(props: ChatViewProps) {
     [routeServerThreadShell, threadDetailLoading],
   );
   const activeServerThread = serverThread ?? loadingServerThread;
+  useSeedComposerFromTaskDetails({
+    threadShell: routeServerThreadShell,
+    threadKey: routeThreadKey,
+    threadRef: routeThreadRef,
+    enabled: routeKind === "server",
+  });
   // Pagination window state for the routed server thread: drives the
   // "load earlier turns" header when the loaded window has older history.
   const routeThreadState = useEnvironmentThread(
@@ -1817,6 +1826,8 @@ export default function ChatView(props: ChatViewProps) {
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
+  const boardDrawerOpen = useBoardDrawerStore((state) => state.open);
+  const toggleBoardDrawer = useBoardDrawerStore((state) => state.toggle);
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
   );
@@ -6801,6 +6812,13 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "board.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleBoardDrawer();
+        return;
+      }
+
       if (command === "rightPanel.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -6986,6 +7004,7 @@ export default function ChatView(props: ChatViewProps) {
     toggleRightPanel,
     toggleRightPanelMaximized,
     toggleTerminalVisibility,
+    toggleBoardDrawer,
     composerRef,
   ]);
 
@@ -9591,6 +9610,9 @@ export default function ChatView(props: ChatViewProps) {
 
   const panelToggleControls = (
     <PanelLayoutControls
+      boardDrawerOpen={boardDrawerOpen}
+      boardShortcutLabel={shortcutLabelForCommand(keybindings, "board.toggle")}
+      onToggleBoardDrawer={toggleBoardDrawer}
       terminalAvailable={activeProject !== null}
       terminalOpen={terminalUiState.terminalOpen}
       terminalShortcutLabel={shortcutLabelForCommand(keybindings, "terminal.toggle")}
@@ -9882,6 +9904,7 @@ export default function ChatView(props: ChatViewProps) {
           />
         </WorkspacePageHeader>
 
+        <BoardDrawer />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}

@@ -19,6 +19,7 @@ import {
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { TurnStartBootstrap } from "./TurnStartBootstrap.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -26,6 +27,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const turnStartBootstrap = yield* TurnStartBootstrap;
     const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
 
     return handlers
@@ -109,14 +111,33 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          const result = yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
-            Effect.tapError(() =>
-              cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-            ),
-            Effect.catch((cause) =>
-              failEnvironmentInternal("orchestration_dispatch_failed", cause),
-            ),
-          );
+          // A failed dispatch must not strand attachments the request uploaded,
+          // whichever path it took. Inlined per pipe: hoisting the tapError
+          // into a shared pipeable erases the typed error channel.
+          const cleanupUploads = () =>
+            cleanupFailedUploadedAttachments(args.payload, normalizedCommand);
+          const toDispatchFailure = (cause: unknown) =>
+            failEnvironmentInternal("orchestration_dispatch_failed", cause);
+          // Same bootstrap handling as the WebSocket dispatch path: a
+          // turn.start carrying `bootstrap` creates the thread (and worktree)
+          // before the turn itself runs.
+          if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
+            return yield* turnStartBootstrap.dispatchTurnStart(normalizedCommand).pipe(
+              Effect.tapError(cleanupUploads),
+              // The WebSocket path hands clients the error's
+              // bootstrapThreadDisposition; over HTTP that signal survives as
+              // its own reason, so a caller knows the thread is gone and a
+              // retry needs a fresh id.
+              Effect.catch((cause) =>
+                cause.bootstrapThreadDisposition === "deleted"
+                  ? failEnvironmentInternal("orchestration_bootstrap_rolled_back", cause)
+                  : toDispatchFailure(cause),
+              ),
+            );
+          }
+          const result = yield* orchestrationEngine
+            .dispatch(normalizedCommand)
+            .pipe(Effect.tapError(cleanupUploads), Effect.catch(toDispatchFailure));
           yield* ProjectCloneTracker.discardCloneForDeletedProject(
             projectCloneTracker,
             normalizedCommand,

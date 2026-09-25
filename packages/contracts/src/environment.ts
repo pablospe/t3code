@@ -150,6 +150,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server supports legacy linkedPullRequest updates through thread.meta.update.
       Independent of threadPullRequests; servers supporting both advertise both. */
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
+  /** Server understands taskDetails / workflowPreset on thread.meta.update.
+      Absent on older servers, so clients hide the board task fields instead
+      of sending them. */
+  threadTaskDetails: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pull-request.link / .unlink, exposes `pullRequests` on
       threads, and routes PullRequestRef.host across projects on the same host. Same
       version-skew contract as threadSettlement. */
