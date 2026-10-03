@@ -106,6 +106,12 @@ export interface EnvironmentThreadShell {
   readonly hasPendingUserInput: boolean;
   /** A mirrored terminal session is waiting for its user there, with its reason. */
   readonly externalSessionWaiting: { readonly reason: string | null } | null;
+  /**
+   * A mirrored terminal session's own activity; null for ordinary threads. A
+   * session the server has not seen yet reads as idle. These threads never
+   * have runs, so lists that key on runs read this instead.
+   */
+  readonly externalSessionStatus: "running" | "waiting" | "idle" | "ended" | null;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
@@ -282,6 +288,8 @@ export function presentThreadShell(
     hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
     externalSessionWaiting:
       externalActivity?.status === "waiting" ? { reason: externalActivity.waitingReason } : null,
+    externalSessionStatus:
+      thread.externalSession == null ? null : (externalActivity?.status ?? "idle"),
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     providerInstanceHistory: thread.providerInstanceHistory ?? [],

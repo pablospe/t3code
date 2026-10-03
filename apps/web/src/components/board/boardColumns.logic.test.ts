@@ -2,6 +2,7 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   EnvironmentId,
   type OrchestrationV2ThreadShell,
+  ProviderDriverKind,
   RunId,
   RuntimeRequestId,
   ThreadId,
@@ -14,6 +15,7 @@ import { makeThreadFixture } from "~/test-fixtures";
 import {
   BOARD_COLUMNS,
   groupThreadsIntoBoardColumns,
+  isBoardCardDraggable,
   isBoardTransitionAllowed,
   isThreadSnoozed,
   resolveBoardColumn,
@@ -172,6 +174,52 @@ describe("resolveBoardColumn", () => {
 
   it("puts quiet threads with a finished run in review", () => {
     expect(resolveBoardColumn(makeShell(finishedRun))).toBe("review");
+  });
+});
+
+describe("terminal-session threads", () => {
+  // Mirrored CLI sessions have no runs: their own activity drives the column.
+  const terminalSession = (status?: "running" | "waiting" | "idle" | "ended") =>
+    makeShell({
+      externalSession: {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        nativeSessionId: "native-session-1",
+        ...(status === undefined
+          ? {}
+          : {
+              activity: {
+                status,
+                waitingReason: status === "waiting" ? "permission prompt" : null,
+                workStartedAt: null,
+              },
+            }),
+      },
+    });
+
+  it("follows the session's activity instead of landing in backlog", () => {
+    expect(resolveBoardColumn(terminalSession("running"))).toBe("running");
+    expect(resolveBoardColumn(terminalSession("waiting"))).toBe("running");
+    expect(resolveBoardColumn(terminalSession("idle"))).toBe("review");
+    expect(resolveBoardColumn(terminalSession("ended"))).toBe("done");
+    // Not yet seen by the server: quiet, so ready for review.
+    expect(resolveBoardColumn(terminalSession())).toBe("review");
+  });
+
+  it("still honors archive and an explicit settle", () => {
+    expect(
+      resolveBoardColumn({
+        ...terminalSession("running"),
+        archivedAt: "2026-08-20T12:00:00.000Z",
+      }),
+    ).toBe("done");
+    expect(resolveBoardColumn({ ...terminalSession("idle"), settledOverride: "settled" })).toBe(
+      "done",
+    );
+  });
+
+  it("is read-only: its cards never drag, ordinary cards do", () => {
+    expect(isBoardCardDraggable(terminalSession("idle"))).toBe(false);
+    expect(isBoardCardDraggable(makeShell())).toBe(true);
   });
 });
 

@@ -20,7 +20,7 @@ import { resolveThreadStatusPill } from "../Sidebar.logic";
 import { resolveSnoozePresets, snoozeWakeDescription, type SnoozePreset } from "../Sidebar.snooze";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { type BoardColumnKey, isThreadSnoozed } from "./boardColumns.logic";
+import { type BoardColumnKey, isBoardCardDraggable, isThreadSnoozed } from "./boardColumns.logic";
 import { BoardCardTooltip } from "./BoardCardTooltip";
 
 export interface BoardCardDragData {
@@ -256,6 +256,8 @@ function BoardCardImpl({
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `${thread.environmentId}:${thread.id}`,
     data: dragData,
+    // Terminal-session cards still open on click; they just never move.
+    disabled: !isBoardCardDraggable(thread),
   });
 
   // The card shares the sidebar row's hover card: the draggable card root is

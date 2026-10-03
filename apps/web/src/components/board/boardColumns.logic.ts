@@ -44,6 +44,7 @@ export type BoardThreadInput = Pick<
   | "interactionMode"
   | "latestRun"
   | "runtime"
+  | "externalSessionStatus"
   | "snoozedUntil"
 >;
 
@@ -68,6 +69,18 @@ export function isThreadSnoozed(
 export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
   if (thread.archivedAt !== null) {
     return "done";
+  }
+
+  // A mirrored terminal session never has runs, so it follows its own
+  // activity instead: working or waiting on its user in the terminal is
+  // Running, a quiet session is ready for Review, an ended one is Done.
+  if (thread.externalSessionStatus !== null) {
+    if (thread.externalSessionStatus === "running" || thread.externalSessionStatus === "waiting") {
+      return "running";
+    }
+    return thread.externalSessionStatus === "ended" || thread.settledOverride === "settled"
+      ? "done"
+      : "review";
   }
 
   const status = resolveSidebarThreadStatus(thread);
@@ -118,6 +131,12 @@ const BOARD_TRANSITIONS: Record<BoardColumnKey, ReadonlyArray<BoardColumnKey>> =
   // returns to when unsettled - see resolveDoneReturnColumn.
   done: [],
 };
+
+/** Terminal-session threads are read-only here: T3 never starts, steers or
+    switches their mode, so no drop has a meaning and their cards do not drag. */
+export function isBoardCardDraggable(thread: Pick<BoardThreadInput, "externalSessionStatus">) {
+  return thread.externalSessionStatus === null;
+}
 
 export function isBoardTransitionAllowed(from: BoardColumnKey, to: BoardColumnKey): boolean {
   return from !== to && BOARD_TRANSITIONS[from].includes(to);
