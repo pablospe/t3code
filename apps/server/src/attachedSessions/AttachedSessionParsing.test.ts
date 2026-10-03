@@ -48,6 +48,36 @@ describe("parseClaudeAgentsRoster", () => {
     ]);
   });
 
+  it("merges processes that run the same session, the most active one first", () => {
+    const process = (name: string, status: string, startedAt: number) => ({
+      sessionId: "shared",
+      cwd: "/repo",
+      kind: "interactive",
+      status,
+      name,
+      startedAt,
+      ...(status === "waiting" ? { waitingFor: "permission prompt" } : {}),
+    });
+    const merged = (...entries: ReadonlyArray<unknown>) =>
+      Option.getOrThrow(parseClaudeAgentsRoster(JSON.stringify(entries)));
+
+    // The resumed copy is idle; the one the user works in is busy.
+    expect(merged(process("copy", "idle", 2), process("main", "busy", 1))).toEqual([
+      expect.objectContaining({ sessionId: "shared", name: "main", status: "busy" }),
+    ]);
+    expect(merged(process("idle", "idle", 3), process("asking", "waiting", 1))).toEqual([
+      expect.objectContaining({
+        name: "asking",
+        status: "waiting",
+        waitingFor: "permission prompt",
+      }),
+    ]);
+    // Equally active: the most recently started process.
+    expect(merged(process("old", "idle", 1), process("new", "idle", 2))).toEqual([
+      expect.objectContaining({ name: "new" }),
+    ]);
+  });
+
   it("reports unreadable output as a failed probe, not as an empty roster", () => {
     expect(Option.isNone(parseClaudeAgentsRoster("claude: command crashed"))).toBe(true);
     expect(Option.isNone(parseClaudeAgentsRoster('{"error":"nope"}'))).toBe(true);
