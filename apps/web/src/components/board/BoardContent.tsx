@@ -26,11 +26,15 @@ import { useLastOpenThreadStore } from "~/lastOpenThreadStore";
 import { useProjectScopeStore } from "~/projectScopeStore";
 import {
   useAllEnvironmentShellsBootstrapped,
+  useServerConfigs,
   useProjects,
   useThreadShells,
 } from "~/state/entities";
 import { fetchThreadProjection as fetchThreadProjectionCommand } from "~/state/orchestration";
 import { useEnvironments } from "~/state/environments";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { mergeEnvironmentSettings, useClientSettings } from "~/hooks/useSettings";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
@@ -50,6 +54,7 @@ import {
   resolveDoneReturnColumn,
   substituteBoardPromptPlaceholders,
 } from "./boardColumns.logic";
+import { resolveBoardTaskModelSelection } from "./boardTaskModel.logic";
 import { BoardBacklogDialog, type BoardBacklogTaskDraft } from "./BoardBacklogDialog";
 import {
   BoardActionButton,
@@ -575,6 +580,12 @@ export function BoardContent({
   // board shows all of them. One candidate is used as is; several make the
   // dialog ask, so a task never lands in a project nobody picked.
   const { environments } = useEnvironments();
+  const serverConfigs = useServerConfigs();
+  const clientSettings = useClientSettings();
+  const stickyActiveProvider = useComposerDraftStore((state) => state.stickyActiveProvider);
+  const stickyModelSelectionByProvider = useComposerDraftStore(
+    (state) => state.stickyModelSelectionByProvider,
+  );
   const newTaskProjectChoices = useMemo(() => {
     const candidates = projects.filter(
       (project) => scope === null || scope.has(boardKey(project.environmentId, project.id)),
@@ -582,19 +593,6 @@ export function BoardContent({
     const titleCounts = new Map<string, number>();
     for (const project of candidates) {
       titleCounts.set(project.title, (titleCounts.get(project.title) ?? 0) + 1);
-    }
-    // A backlog thread is created without a run, so it still needs a model:
-    // the project default, else whatever the user last worked with there,
-    // else anywhere.
-    let latestAnywhere: SidebarThreadSummary | null = null;
-    const latestByProject = new Map<string, SidebarThreadSummary>();
-    for (const thread of threads) {
-      if (latestAnywhere === null || thread.updatedAt > latestAnywhere.updatedAt) {
-        latestAnywhere = thread;
-      }
-      const key = boardKey(thread.environmentId, thread.projectId);
-      const latest = latestByProject.get(key);
-      if (!latest || thread.updatedAt > latest.updatedAt) latestByProject.set(key, thread);
     }
     return candidates
       .map((project) => {
@@ -610,16 +608,37 @@ export function BoardContent({
             (titleCounts.get(project.title) ?? 0) > 1 && environmentLabel
               ? `${project.title} (${environmentLabel})`
               : project.title,
-          modelSelection:
-            project.defaultModelSelection ??
-            latestByProject.get(key)?.modelSelection ??
-            latestAnywhere?.modelSelection ??
-            null,
+          // A backlog thread is created without a run, so it still needs a
+          // model, chosen the way a regular new thread chooses one.
+          modelSelection: (() => {
+            const serverConfig = serverConfigs.get(project.environmentId);
+            if (!serverConfig) return null;
+            return resolveBoardTaskModelSelection({
+              projectDefault:
+                resolveProjectSettings(serverConfig.settings, project.id, project).settings
+                  .defaultModelSelection ?? null,
+              sticky: {
+                activeProvider: stickyActiveProvider,
+                byProvider: stickyModelSelectionByProvider,
+              },
+              providers: serverConfig.providers,
+              settings: mergeEnvironmentSettings(serverConfig.settings, clientSettings),
+            });
+          })(),
           taskFieldsSupported: supportsTaskDetails(project.environmentId),
         };
       })
       .toSorted((left, right) => left.label.localeCompare(right.label));
-  }, [projects, scope, threads, environments, supportsTaskDetails]);
+  }, [
+    projects,
+    scope,
+    environments,
+    supportsTaskDetails,
+    serverConfigs,
+    clientSettings,
+    stickyActiveProvider,
+    stickyModelSelectionByProvider,
+  ]);
 
   const openBacklogDialog = useCallback(() => setBacklogDialogOpen(true), []);
 
