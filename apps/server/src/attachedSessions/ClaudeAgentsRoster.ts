@@ -26,6 +26,7 @@ const RosterEntry = Schema.Struct({
   name: Schema.optional(Schema.String),
   waitingFor: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.Finite),
+  pid: Schema.optional(Schema.Finite),
 });
 
 const decodeRosterEntry = Schema.decodeUnknownOption(RosterEntry);
@@ -39,6 +40,14 @@ export interface ClaudeAgentsRosterEntry {
   readonly status: "busy" | "waiting" | "idle";
   readonly waitingFor: string | null;
   readonly startedAt: number | null;
+  readonly pid: number | null;
+  /**
+   * The process descends from this T3 server: a run T3 started, or its send
+   * relay. Such a session already has a thread, or is plumbing, and is never
+   * mirrored. Its native session id can be unknown to T3 while the run starts,
+   * so this is the reliable signal.
+   */
+  readonly spawnedByServer: boolean;
 }
 
 interface ClaudeAgentsRosterSnapshot {
@@ -67,7 +76,9 @@ function mergeSessionProcesses(
       STATUS_RANK[entry.status] > STATUS_RANK[current.status] ||
       (STATUS_RANK[entry.status] === STATUS_RANK[current.status] &&
         (entry.startedAt ?? 0) > (current.startedAt ?? 0));
-    if (wins) bySession.set(entry.sessionId, entry);
+    const spawnedByServer = entry.spawnedByServer || current?.spawnedByServer === true;
+    if (wins) bySession.set(entry.sessionId, { ...entry, spawnedByServer });
+    else if (spawnedByServer) bySession.set(entry.sessionId, { ...current, spawnedByServer });
   }
   return [...bySession.values()];
 }
@@ -75,6 +86,7 @@ function mergeSessionProcesses(
 /** Only the human-driven sessions; T3 Code's own SDK sessions are not `interactive`. */
 export function parseClaudeAgentsRoster(
   stdout: string,
+  serverDescendants: ReadonlySet<number> = new Set(),
 ): Option.Option<ReadonlyArray<ClaudeAgentsRosterEntry>> {
   const parsed = decodeJson(stdout);
   if (Option.isNone(parsed) || !Array.isArray(parsed.value)) return Option.none();
@@ -94,6 +106,9 @@ export function parseClaudeAgentsRoster(
             status: status === "busy" || status === "waiting" ? status : "idle",
             waitingFor: entry.value.waitingFor?.trim() || null,
             startedAt: entry.value.startedAt ?? null,
+            pid: entry.value.pid ?? null,
+            spawnedByServer:
+              entry.value.pid !== undefined && serverDescendants.has(entry.value.pid),
           },
         ];
       }),
@@ -112,6 +127,36 @@ export function parseClaudeAgentsRoster(
  */
 export function isClaudeMemObserverSession(cwd: string): boolean {
   return cwd.split(/[/\\]+/).some((segment) => segment === ".claude-mem");
+}
+
+/**
+ * The processes below `ancestorPid`, from `ps -A -o pid=,ppid=` output. Lines
+ * that do not read as two numbers are skipped.
+ */
+export function descendantPids(psOutput: string, ancestorPid: number): ReadonlySet<number> {
+  const children = new Map<number, Array<number>>();
+  for (const line of psOutput.split("\n")) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (
+      pid === undefined ||
+      ppid === undefined ||
+      !Number.isInteger(pid) ||
+      !Number.isInteger(ppid)
+    ) {
+      continue;
+    }
+    children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+  }
+  const found = new Set<number>();
+  const pending = [ancestorPid];
+  for (let parent = pending.pop(); parent !== undefined; parent = pending.pop()) {
+    for (const child of children.get(parent) ?? []) {
+      if (found.has(child)) continue;
+      found.add(child);
+      pending.push(child);
+    }
+  }
+  return found;
 }
 
 export class ClaudeAgentsRoster extends Context.Service<
@@ -157,7 +202,16 @@ export const layer = Layer.effect(
         yield* Effect.logDebug("attached-sessions.roster.probe-exit", { code: result.code });
         return Option.none<ClaudeAgentsRosterSnapshot>();
       }
-      return Option.map(parseClaudeAgentsRoster(result.stdout), (sessions) => ({
+      // Without a process table (no `ps`, e.g. on Windows) the provider-thread
+      // check in the mirror is the only guard against mirroring T3's own runs.
+      const processTable = yield* processRunner
+        .run({ command: "ps", args: ["-A", "-o", "pid=,ppid="], timeout: PROBE_TIMEOUT })
+        .pipe(
+          Effect.map((ps) => (ps.code === 0 ? ps.stdout : "")),
+          Effect.orElseSucceed(() => ""),
+        );
+      const serverDescendants = descendantPids(processTable, process.pid);
+      return Option.map(parseClaudeAgentsRoster(result.stdout, serverDescendants), (sessions) => ({
         sessions,
         configDir,
       }));

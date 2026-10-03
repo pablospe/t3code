@@ -51,6 +51,7 @@ const LEGACY = "33333333-3333-4333-8333-333333333333";
 const OBSERVER = "44444444-4444-4444-8444-444444444444";
 const RESUMED = "55555555-5555-4555-8555-555555555555";
 const IDLE = "66666666-6666-4666-8666-666666666666";
+const T3_RUN = "77777777-7777-4777-8777-777777777777";
 const projectId = ProjectId.make("project:attached");
 
 const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-attached-sessions-"));
@@ -93,6 +94,7 @@ const rosterEntry = (
   status: ClaudeAgentsRosterEntry["status"],
   cwd = workspace,
   waitingFor: string | null = null,
+  spawnedByServer = false,
 ): ClaudeAgentsRosterEntry => ({
   sessionId,
   cwd,
@@ -100,6 +102,8 @@ const rosterEntry = (
   status,
   waitingFor,
   startedAt: null,
+  pid: null,
+  spawnedByServer,
 });
 
 const database = SqlitePersistenceMemory;
@@ -522,6 +526,47 @@ it.effect("an idle terminal session reaches clients with its marker on the threa
     }).pipe(Effect.provide(makeTestLayer({ roster, sends, legacyImports })));
   });
 });
+
+it.effect(
+  "never mirrors a Claude process this server spawned, even before T3 knows its session id",
+  () => {
+    appendTranscript(T3_RUN, userText("t1", "plan the board drop"));
+    return Effect.gen(function* () {
+      // While a run starts, T3 has no provider thread for the native session id yet.
+      const roster = yield* Ref.make<ReadonlyArray<ClaudeAgentsRosterEntry>>([
+        rosterEntry(T3_RUN, "busy", workspace, null, true),
+      ]);
+      const sends = yield* Ref.make<ReadonlyArray<AttachedSessionSendInput>>([]);
+      const legacyImports = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+      yield* Effect.gen(function* () {
+        const mirror = yield* AttachedSessions.AttachedSessions;
+        const sweep = mirror.sweep("roster").pipe(Effect.andThen(mirror.drain));
+        const threadId = attachedClaudeThreadId(T3_RUN);
+
+        yield* sweep;
+        assert.isTrue(Option.isNone(yield* Effect.option(projectionOf(threadId))));
+      }).pipe(Effect.provide(makeTestLayer({ roster, sends, legacyImports })));
+
+      // A fresh server that mirrored the session before its process was recognized disowns it.
+      yield* Effect.gen(function* () {
+        const mirror = yield* AttachedSessions.AttachedSessions;
+        const sweep = mirror.sweep("roster").pipe(Effect.andThen(mirror.drain));
+        const threadId = attachedClaudeThreadId(T3_RUN);
+        yield* Ref.set(roster, [rosterEntry(T3_RUN, "busy")]);
+        yield* sweep;
+        assert.isNull((yield* projectionOf(threadId)).thread.archivedAt);
+
+        yield* Ref.set(roster, [rosterEntry(T3_RUN, "busy", workspace, null, true)]);
+        yield* sweep;
+        assert.isNotNull((yield* projectionOf(threadId)).thread.archivedAt);
+        // Not taken back on later sweeps, even once the process looks ordinary.
+        yield* Ref.set(roster, [rosterEntry(T3_RUN, "busy")]);
+        yield* sweep;
+        assert.isNotNull((yield* projectionOf(threadId)).thread.archivedAt);
+      }).pipe(Effect.provide(makeTestLayer({ roster, sends, legacyImports })));
+    });
+  },
+);
 
 /** A V1 mirror cursor for `sessionId`, already covering `offset` bytes of its transcript. */
 function writeLegacyCursor(stateDir: string, offset: number, sessionId = LEGACY) {
