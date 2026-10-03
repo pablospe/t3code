@@ -354,14 +354,14 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/** Task text streams in every shell row, so it stays bounded. */
+export const THREAD_TASK_DETAILS_MAX_LENGTH = 10_000;
+
 /**
  * Board task fields: the task text a backlog card shows and the composer is
  * seeded with before the first run, and the drop-prompt preset chosen for it.
  * Optional so payloads from servers without them still decode.
  */
-/** Task text streams in every shell row, so it stays bounded. */
-export const THREAD_TASK_DETAILS_MAX_LENGTH = 10_000;
-
 const OrchestrationV2ThreadTaskFields = {
   taskDetails: Schema.optional(
     Schema.NullOr(
