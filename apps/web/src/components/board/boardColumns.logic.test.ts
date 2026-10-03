@@ -213,6 +213,28 @@ describe("terminal-session threads", () => {
     expect(resolveBoardColumn(waiting)).toBe("running");
   });
 
+  it("leaves ordinary threads on the run rules beside terminal sessions", () => {
+    // Real presented shells: a plain unstarted thread is Backlog, never Review.
+    const unstarted = makeShell();
+    expect(unstarted.externalSessionStatus).toBeNull();
+    expect(resolveBoardColumn(unstarted)).toBe("backlog");
+    expect(resolveBoardColumn(makeShell({ title: "Add subtract v2" }))).toBe("backlog");
+    expect(resolveBoardColumn(terminalSession("idle"))).toBe("review");
+    // A shell presented before the field existed reads as an ordinary thread.
+    const { externalSessionStatus: _omitted, ...legacy } = unstarted;
+    expect(resolveBoardColumn(legacy as typeof unstarted)).toBe("backlog");
+    expect(isBoardCardDraggable(legacy as typeof unstarted)).toBe(true);
+  });
+
+  it("keeps a live session in running even when settled", () => {
+    expect(resolveBoardColumn({ ...terminalSession("running"), settledOverride: "settled" })).toBe(
+      "running",
+    );
+    expect(resolveBoardColumn({ ...terminalSession("waiting"), settledOverride: "settled" })).toBe(
+      "running",
+    );
+  });
+
   it("still honors archive and an explicit settle", () => {
     expect(
       resolveBoardColumn({

@@ -73,8 +73,10 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
 
   // A mirrored terminal session never has runs, so it follows its own
   // activity instead: working or waiting on its user in the terminal is
-  // Running, a quiet session is ready for Review, an ended one is Done.
-  if (thread.externalSessionStatus !== null) {
+  // Running (ahead of a settle, like blocked work), a quiet session is ready
+  // for Review, an ended one is Done. Loose `!= null`: a shell presented by an
+  // older client build lacks the field, and that must read as an ordinary thread.
+  if (thread.externalSessionStatus != null) {
     if (thread.externalSessionStatus === "running" || thread.externalSessionStatus === "waiting") {
       return "running";
     }
@@ -137,7 +139,7 @@ const BOARD_TRANSITIONS: Record<BoardColumnKey, ReadonlyArray<BoardColumnKey>> =
 /** Terminal-session threads are read-only here: T3 never starts, steers or
     switches their mode, so no drop has a meaning and their cards do not drag. */
 export function isBoardCardDraggable(thread: Pick<BoardThreadInput, "externalSessionStatus">) {
-  return thread.externalSessionStatus === null;
+  return thread.externalSessionStatus == null;
 }
 
 export function isBoardTransitionAllowed(from: BoardColumnKey, to: BoardColumnKey): boolean {
