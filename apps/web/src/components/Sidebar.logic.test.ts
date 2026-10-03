@@ -2102,8 +2102,33 @@ describe("mirrored terminal sessions", () => {
       },
     });
 
-  it.each(["running", "waiting"] as const)("reads a %s session as working", (status) => {
-    expect(resolveSidebarThreadStatus(presentSession(status))).toBe("working");
+  it("reads a running session as working", () => {
+    expect(resolveSidebarThreadStatus(presentSession("running"))).toBe("working");
+  });
+
+  it("shows a session waiting in its terminal as that, not as working with a timer", () => {
+    const thread = presentSession("waiting");
+    // Its runtime still says "waiting", which alone would read as working.
+    expect(thread.runtime?.status).toBe("waiting");
+    const status = resolveSidebarThreadStatus(thread);
+    expect(status).toBe("terminal");
+    expect(shouldShowSidebarV2Duration(status)).toBe(false);
+    expect(resolveSidebarV2TopStatus({ status, isUnread: false, isWoke: false })).toBe("terminal");
+    // It needs the user, so it stays in the inbox and does not recede.
+    expect(isSidebarThreadWorking(thread)).toBe(false);
+    expect(
+      shouldRecedeSidebarThread({
+        status,
+        isUnread: false,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(false);
+    expect(resolveThreadStatusPill({ thread })).toMatchObject({
+      label: "Waiting in terminal",
+      tooltip: "Waiting in terminal: permission prompt",
+    });
   });
 
   it.each(["idle", "ended"] as const)("reads an %s session as resting, not busy", (status) => {

@@ -925,6 +925,7 @@ export function resolveThreadRowClassName(input: {
 export type SidebarThreadStatus =
   | "approval"
   | "input"
+  | "terminal"
   | "working"
   | "waiting"
   | "failed"
@@ -938,7 +939,14 @@ export function shouldRecedeSidebarThread(input: {
   isActive: boolean;
   isSelected: boolean;
 }): boolean {
-  if (input.isActive || input.isSelected || input.status === "input") return false;
+  if (
+    input.isActive ||
+    input.isSelected ||
+    input.status === "input" ||
+    input.status === "terminal"
+  ) {
+    return false;
+  }
   if (input.status === "working" || input.status === "waiting") return true;
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
@@ -949,7 +957,9 @@ export function shouldRecedeSidebarThread(input: {
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
->;
+> & {
+  externalSessionWaiting?: SidebarThreadSummary["externalSessionWaiting"] | undefined;
+};
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
@@ -957,6 +967,11 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   }
   if (thread.hasPendingUserInput) {
     return "input";
+  }
+  // A mirrored terminal session needs its user in the terminal; its runtime
+  // still says "waiting", which would otherwise read as working.
+  if (thread.externalSessionWaiting) {
+    return "terminal";
   }
   if (
     thread.runtime !== null &&
@@ -979,6 +994,7 @@ export type SidebarV2TopStatusKind =
   | "failed"
   | "limited"
   | "input"
+  | "terminal"
   | "waiting"
   | "woke"
   | "working";
@@ -999,6 +1015,9 @@ export function resolveSidebarV2TopStatus(input: {
   }
   if (input.status === "input") {
     return "input";
+  }
+  if (input.status === "terminal") {
+    return "terminal";
   }
   if (input.status === "failed" || input.status === "limited") {
     return input.status;
