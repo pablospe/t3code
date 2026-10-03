@@ -87,12 +87,13 @@ const rosterEntry = (
   sessionId: string,
   status: ClaudeAgentsRosterEntry["status"],
   cwd = workspace,
+  waitingFor: string | null = null,
 ): ClaudeAgentsRosterEntry => ({
   sessionId,
   cwd,
   name: `session-${sessionId.slice(0, 4)}`,
   status,
-  waitingFor: null,
+  waitingFor,
   startedAt: null,
 });
 
@@ -165,8 +166,8 @@ const projectionOf = (threadId: ThreadId) =>
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     return yield* orchestrator.getThreadProjection(threadId);
   });
-const rootStatus = (projection: OrchestrationV2ThreadProjection) =>
-  projection.nodes.findLast((node) => node.kind === "root_turn" && node.runId === null)?.status;
+const activityStatus = (projection: OrchestrationV2ThreadProjection) =>
+  projection.thread.externalSession?.activity?.status;
 const timeline = (projection: OrchestrationV2ThreadProjection) =>
   projection.turnItems
     .toSorted((left, right) => left.ordinal - right.ordinal)
@@ -248,14 +249,19 @@ it.effect("mirrors a terminal session, keeps T3 control off it, and relays messa
       yield* sweep("roster");
 
       let projection = yield* projectionOf(threadId);
-      assert.deepEqual(projection.thread.externalSession, {
+      assert.deepInclude(projection.thread.externalSession, {
         driver: ProviderDriverKind.make("claudeAgent"),
         nativeSessionId: LIVE,
       });
       assert.equal(projection.thread.projectId, projectId);
       assert.equal(projection.thread.branch, "main");
       assert.deepEqual(timeline(projection), ["user_message:hello", "assistant_message:hi there"]);
-      assert.equal(rootStatus(projection), "running");
+      assert.equal(activityStatus(projection), "running");
+      // The session's lifetime, not inactivity, takes the thread off the active list.
+      assert.isNotNull(projection.thread.autoSettleDisabledAt ?? null);
+      // The sidebar reads the session's activity from the thread shell.
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      assert.equal(shell?.externalSession?.activity?.status, "running");
       for (const skipped of [T3_OWNED, OBSERVER]) {
         const missing = yield* Effect.option(projectionOf(attachedClaudeThreadId(skipped)));
         assert.isTrue(Option.isNone(missing), `${skipped} must not be mirrored`);
@@ -360,8 +366,18 @@ it.effect("mirrors a terminal session, keeps T3 control off it, and relays messa
       yield* Ref.set(roster, []);
       yield* sweep("roster");
       projection = yield* projectionOf(threadId);
-      assert.equal(rootStatus(projection), "completed");
+      assert.equal(activityStatus(projection), "ended");
       assert.equal(projection.thread.settledOverride, "settled");
+
+      // Resumed in the terminal and stopped at a prompt: back on the active list, with the reason.
+      yield* Ref.set(roster, [rosterEntry(LIVE, "waiting", workspace, "permission prompt")]);
+      yield* sweep("roster");
+      projection = yield* projectionOf(threadId);
+      assert.equal(projection.thread.settledOverride, "active");
+      assert.deepInclude(projection.thread.externalSession?.activity, {
+        status: "waiting",
+        waitingReason: "permission prompt",
+      });
       assert.deepEqual(yield* Ref.get(legacyImports), []);
     }).pipe(Effect.provide(makeTestLayer({ roster, sends, legacyImports })));
   });
@@ -403,7 +419,8 @@ it.effect("adopts a thread the V1 mirror created instead of duplicating it", () 
       yield* mirror.sweep("roster").pipe(Effect.andThen(mirror.drain));
       let projection = yield* projectionOf(threadId);
       assert.equal(projection.thread.externalSession?.nativeSessionId, LEGACY);
-      assert.equal(rootStatus(projection), "waiting");
+      assert.isNotNull(projection.thread.autoSettleDisabledAt ?? null);
+      assert.equal(activityStatus(projection), "waiting");
       assert.deepEqual(timeline(projection), []);
 
       appendTranscript(LEGACY, assistant("l2", [{ type: "text", text: "after the upgrade" }]));

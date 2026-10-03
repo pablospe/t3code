@@ -410,6 +410,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.background-work.settle":
     case "provider.switch":
     case "thread.external-session.message.send":
+    case "thread.external-session.update":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -9284,6 +9285,53 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ]);
   });
 
+  /**
+   * Stamps the external-session marker and the session's latest activity. A
+   * thread that already mirrors a different session is never re-pointed.
+   */
+  const dispatchExternalSessionUpdate = Effect.fn("orchestrationV2.dispatch.externalSessionUpdate")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.external-session.update" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const current = thread.externalSession ?? null;
+      if (
+        thread.deletedAt !== null ||
+        (current !== null && current.nativeSessionId !== command.externalSession.nativeSessionId)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} does not mirror this session.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          externalSession: command.externalSession,
+          autoSettleDisabledAt: thread.autoSettleDisabledAt ?? now,
+        },
+      });
+    },
+  );
+
   const dispatchUnsupported = (command: OrchestrationV2ServerCommand) =>
     Effect.fail(
       new OrchestratorDispatchError({
@@ -9448,6 +9496,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       case "thread.external-session.message.send":
         yield* dispatchExternalSessionMessageSend(command, events, effects);
+        break;
+      case "thread.external-session.update":
+        yield* dispatchExternalSessionUpdate(command, events);
         break;
       case "notification.delivery.accept":
         yield* dispatchNotificationAccepted(command, events);

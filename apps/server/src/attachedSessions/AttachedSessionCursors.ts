@@ -20,6 +20,8 @@ const AttachedSessionCursor = Schema.Struct({
   status: Schema.NullOr(Schema.String),
   /** When the current stretch of work began. */
   workStartedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** What the session waits for while its status is `waiting`. */
+  waitingFor: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** Tools that started but have not completed, so their result row keeps its title and place. */
   toolCalls: Schema.Record(
     Schema.String,

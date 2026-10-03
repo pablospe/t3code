@@ -363,6 +363,22 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
 export const OrchestrationV2ExternalSession = Schema.Struct({
   driver: ProviderDriverKind,
   nativeSessionId: TrimmedNonEmptyString,
+  /**
+   * What the session is doing, as its owner reports it. These threads have no
+   * runs, so clients show working and waiting from here. Absent until the
+   * server has seen the session.
+   */
+  activity: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        status: Schema.Literals(["running", "waiting", "idle", "ended"]),
+        /** What a waiting session waits for, in its own words ("permission prompt"). */
+        waitingReason: Schema.NullOr(TrimmedNonEmptyString),
+        /** When the current stretch of work began; kept while running and waiting alternate. */
+        workStartedAt: Schema.NullOr(IsoDateTime),
+      }),
+    ),
+  ),
 });
 export type OrchestrationV2ExternalSession = typeof OrchestrationV2ExternalSession.Type;
 
@@ -1724,6 +1740,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  externalSession: Schema.optional(Schema.NullOr(OrchestrationV2ExternalSession)),
   latestRunId: Schema.NullOr(RunId),
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2907,6 +2924,18 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  /**
+   * Records an external-session thread's marker and the session's activity.
+   * The mirror sends it so these writes serialize with the user's own commands
+   * on the thread. It also turns automatic settlement off: the session's
+   * lifetime, not inactivity, decides when the thread leaves the active list.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.external-session.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    externalSession: OrchestrationV2ExternalSession,
+  }),
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is

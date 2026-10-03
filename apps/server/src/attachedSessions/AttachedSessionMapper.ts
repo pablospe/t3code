@@ -1,9 +1,9 @@
 /**
  * Pure mapping from an attached Claude CLI session to Orchestration V2 events.
  *
- * Everything is runless: the session's work is one runless root turn whose
- * status follows the CLI roster, the way provider-native subagent threads are
- * modeled. Message, turn item and node ids are derived from the session and the
+ * Everything is runless, like the agent session importer's history. What the
+ * session is doing lives on the thread's `externalSession.activity`, which
+ * follows the CLI roster. Message and turn item ids are derived from the session and the
  * transcript record, so re-reading a transcript upserts the same records instead
  * of duplicating them. Event ids are left to the caller, because the event log
  * keeps every write.
@@ -12,13 +12,12 @@ import {
   ATTACHED_CLAUDE_INSTANCE_ID,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
-  NodeId,
   ProviderDriverKind,
   TurnItemId,
   type ChatImageAttachment,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
-  type OrchestrationV2ExecutionNode,
+  type OrchestrationV2ExternalSession,
   type OrchestrationV2TurnItem,
   type ProjectId,
   type ThreadId,
@@ -38,17 +37,15 @@ export type AttachedEventDraft = OrchestrationV2DomainEvent extends infer Event
 
 type AttachedSessionCliStatus = "busy" | "waiting" | "idle";
 
-/** The root turn's status. `completed` once the session has exited. */
-export type AttachedRootStatus = Extract<
-  OrchestrationV2ExecutionNode["status"],
-  "running" | "waiting" | "idle" | "completed"
->;
+export type AttachedActivityStatus = NonNullable<
+  NonNullable<OrchestrationV2ExternalSession["activity"]>
+>["status"];
 
-export const ATTACHED_ROOT_STATUSES: ReadonlySet<string> = new Set<AttachedRootStatus>([
+export const ATTACHED_ACTIVITY_STATUSES: ReadonlySet<string> = new Set<AttachedActivityStatus>([
   "running",
   "waiting",
   "idle",
-  "completed",
+  "ended",
 ]);
 
 export interface AttachedToolCall {
@@ -58,11 +55,9 @@ export interface AttachedToolCall {
   readonly ordinal?: number;
 }
 
-export function attachedRootStatus(status: AttachedSessionCliStatus): AttachedRootStatus {
+export function attachedActivityStatus(status: AttachedSessionCliStatus): AttachedActivityStatus {
   return status === "busy" ? "running" : status;
 }
-
-const attachedRootNodeId = (sessionId: string) => NodeId.make(`attached:${sessionId}:root`);
 
 const attachedMessageId = (sessionId: string, uuid: string) =>
   MessageId.make(`attached:${sessionId}:${uuid}`);
@@ -107,6 +102,8 @@ export function attachedThread(input: {
     settledOverride: null,
     settledAt: null,
     unsettledAt: null,
+    // The session's lifetime decides when it leaves the active list, not inactivity.
+    autoSettleDisabledAt: now,
     snoozedUntil: null,
     snoozedAt: null,
     pinnedAt: null,
@@ -114,44 +111,6 @@ export function attachedThread(input: {
     activeOrderKey: null,
     lastVisitedAt: null,
     deletedAt: null,
-  };
-}
-
-/**
- * The session's runless root turn. `workStartedAt` is when the current stretch
- * of work began, so clients can show how long the session has been busy.
- */
-export function attachedRootNodeEvent(input: {
-  readonly sessionId: string;
-  readonly threadId: ThreadId;
-  readonly status: AttachedRootStatus;
-  readonly workStartedAt: string | null;
-  readonly now: string;
-}): AttachedEventDraft {
-  const nodeId = attachedRootNodeId(input.sessionId);
-  const active = input.status === "running" || input.status === "waiting";
-  return {
-    type: "node.updated",
-    threadId: input.threadId,
-    nodeId,
-    occurredAt: at(input.now),
-    payload: {
-      id: nodeId,
-      threadId: input.threadId,
-      runId: null,
-      parentNodeId: null,
-      rootNodeId: nodeId,
-      kind: "root_turn",
-      status: input.status,
-      countsForRun: false,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      runtimeRequestId: null,
-      checkpointScopeId: null,
-      startedAt: input.workStartedAt === null ? null : at(input.workStartedAt),
-      completedAt: active ? null : at(input.now),
-    },
   };
 }
 
@@ -169,7 +128,7 @@ function itemBase(input: {
     id: attachedTurnItemId(input.sessionId, input.key),
     threadId: input.threadId,
     runId: null,
-    nodeId: attachedRootNodeId(input.sessionId),
+    nodeId: null,
     providerThreadId: null,
     providerTurnId: null,
     nativeItemRef: null,
@@ -230,7 +189,7 @@ function attachedMessageEvents(input: {
         id: messageId,
         threadId: input.threadId,
         runId: null,
-        nodeId: attachedRootNodeId(input.sessionId),
+        nodeId: null,
         role: input.role,
         text: input.text,
         attachments: input.attachments,

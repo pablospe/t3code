@@ -3,8 +3,10 @@
  *
  * The terminal stays the only owner of the session. This service only observes:
  * it polls the CLI roster for which sessions exist and what they are doing, and
- * tails each session's transcript for the conversation. It writes runless V2
- * events straight to the event sink, the way the agent session importer does,
+ * tails each session's transcript for the conversation. The conversation is
+ * written as runless V2 events straight to the event sink, the way the agent
+ * session importer does; the marker and the session's activity go through the
+ * orchestrator so they serialize with the user's commands on the thread. It
  * and never creates a run, provider thread or provider session, so nothing in
  * T3 tries to start, resume or recover these threads. Messages typed in T3 reach
  * the session through AttachedSessionSender.
@@ -52,16 +54,15 @@ import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import {
-  ATTACHED_ROOT_STATUSES,
+  ATTACHED_ACTIVITY_STATUSES,
   CLAUDE_DRIVER,
   attachedBackfillEvents,
   attachedEntryEvents,
-  attachedRootNodeEvent,
-  attachedRootStatus,
+  attachedActivityStatus,
   attachedThread,
   attachedToolEvent,
   type AttachedEventDraft,
-  type AttachedRootStatus,
+  type AttachedActivityStatus,
   type AttachedToolCall,
 } from "./AttachedSessionMapper.ts";
 import {
@@ -113,7 +114,8 @@ interface TrackedSession {
   /** Bytes of the transcript already mirrored. Persisted; reading only moves forward from here. */
   offset: number;
   readonly toolCalls: Map<string, AttachedToolCall>;
-  status: AttachedRootStatus | null;
+  status: AttachedActivityStatus | null;
+  waitingFor: string | null;
   workStartedAt: string | null;
   endedAt: string | null;
   /**
@@ -127,7 +129,7 @@ interface TrackedSession {
   historyReady: boolean;
 }
 
-const isActiveStatus = (status: AttachedRootStatus | null) =>
+const isActiveStatus = (status: AttachedActivityStatus | null) =>
   status === "running" || status === "waiting";
 
 const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
@@ -179,6 +181,27 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         yield* eventSink.write({ events });
       });
 
+    /** Writes the marker and activity through the orchestrator, serialized with the user's commands. */
+    const updateExternalSession = (
+      session: TrackedSession,
+      activity: NonNullable<OrchestrationV2AppThread["externalSession"]>["activity"],
+    ) =>
+      Effect.gen(function* () {
+        const now = yield* nowIso;
+        yield* orchestrator.dispatch({
+          type: "thread.external-session.update",
+          commandId: CommandId.make(
+            `attached:${session.sessionId}:activity:${now}:${activity?.status ?? "adopt"}`,
+          ),
+          threadId: session.threadId,
+          externalSession: {
+            driver: CLAUDE_DRIVER,
+            nativeSessionId: session.sessionId,
+            ...(activity === undefined ? {} : { activity }),
+          },
+        });
+      });
+
     /**
      * Threads the V1 mirror created were imported as plain V1 history. Marking
      * them as external sessions puts them under the same rules as new ones.
@@ -188,18 +211,8 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       thread: OrchestrationV2AppThread,
     ) {
       if (isExternalSessionThread(thread)) return;
-      yield* write(session.threadId, [
-        {
-          type: "thread.metadata-updated",
-          threadId: session.threadId,
-          occurredAt: yield* DateTime.now,
-          payload: {
-            ...thread,
-            externalSession: { driver: CLAUDE_DRIVER, nativeSessionId: session.sessionId },
-          },
-        },
-      ]);
-      // The V1 status values mean nothing to the root turn; write it again.
+      yield* updateExternalSession(session, null);
+      // The V1 status values mean nothing here; write the activity again.
       session.status = null;
       cursorsDirty = true;
       yield* Effect.logInfo("attached-sessions.adopted", { threadId: session.threadId });
@@ -221,9 +234,10 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
             offset: cursor.offset,
             toolCalls: new Map(Object.entries(cursor.toolCalls)),
             status:
-              cursor.status !== null && ATTACHED_ROOT_STATUSES.has(cursor.status)
-                ? (cursor.status as AttachedRootStatus)
+              cursor.status !== null && ATTACHED_ACTIVITY_STATUSES.has(cursor.status)
+                ? (cursor.status as AttachedActivityStatus)
                 : null,
+            waitingFor: cursor.waitingFor ?? null,
             workStartedAt: cursor.workStartedAt ?? null,
             endedAt: cursor.endedAt,
             paused: false,
@@ -251,6 +265,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
               transcriptPath: session.transcriptPath,
               offset: session.offset,
               status: session.status,
+              waitingFor: session.waitingFor,
               workStartedAt: session.workStartedAt,
               toolCalls: Object.fromEntries(session.toolCalls),
               endedAt: session.endedAt,
@@ -476,6 +491,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         offset: 0,
         toolCalls: new Map(),
         status: null,
+        waitingFor: null,
         workStartedAt: null,
         endedAt: null,
         paused: false,
@@ -548,23 +564,22 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
 
     const applyStatus = Effect.fn("AttachedSessions.applyStatus")(function* (
       session: TrackedSession,
-      status: AttachedRootStatus,
+      status: AttachedActivityStatus,
+      waitingFor: string | null = null,
     ) {
-      if (session.status === status) return;
+      const reason = status === "waiting" ? waitingFor : null;
+      if (session.status === status && session.waitingFor === reason) return;
       const now = yield* nowIso;
       if (isActiveStatus(status) && !isActiveStatus(session.status)) {
         session.workStartedAt = now;
       }
-      yield* write(session.threadId, [
-        attachedRootNodeEvent({
-          sessionId: session.sessionId,
-          threadId: session.threadId,
-          status,
-          workStartedAt: session.workStartedAt,
-          now,
-        }),
-      ]);
+      yield* updateExternalSession(session, {
+        status,
+        waitingReason: reason,
+        workStartedAt: session.workStartedAt,
+      });
       session.status = status;
+      session.waitingFor = reason;
       cursorsDirty = true;
     });
 
@@ -598,7 +613,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
                 ],
           ),
         );
-        yield* applyStatus(session, "completed");
+        yield* applyStatus(session, "ended");
       }
       session.toolCalls.clear();
       session.endedAt = yield* nowIso;
@@ -626,6 +641,20 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
           ),
         );
       session.settled = true;
+      cursorsDirty = true;
+    });
+
+    const unsettleThread = Effect.fn("AttachedSessions.unsettleThread")(function* (
+      session: TrackedSession,
+    ) {
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make(`attached:${session.sessionId}:unsettle:${yield* nowIso}`),
+        threadId: session.threadId,
+        // The user resumed the session in the terminal.
+        reason: "user",
+      });
+      session.settled = false;
       cursorsDirty = true;
     });
 
@@ -684,10 +713,10 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       }
       for (const entry of live.values()) {
         const known = all.get(entry.sessionId);
-        if (known !== undefined && known.endedAt !== null) {
-          // Resumed in the terminal. The thread stays where the user shelved it.
+        // Resumed in the terminal: the thread comes back to the active list.
+        const resumed = known !== undefined && known.endedAt !== null;
+        if (resumed) {
           known.endedAt = null;
-          known.settled = false;
           cursorsDirty = true;
         }
         yield* Effect.gen(function* () {
@@ -703,7 +732,8 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
             onSome: (value) => value.archivedAt !== null || value.deletedAt !== null,
           });
           if (session.paused) return;
-          yield* applyStatus(session, attachedRootStatus(entry.status));
+          if (resumed && session.settled) yield* unsettleThread(session);
+          yield* applyStatus(session, attachedActivityStatus(entry.status), entry.waitingFor);
         }).pipe(
           Effect.catch((cause) =>
             Effect.logWarning("attached-sessions.session-failed", {
