@@ -424,6 +424,7 @@ import {
 } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
 import { BoardDrawer } from "./board/BoardDrawer";
+import { useSeedComposerFromTaskDetails } from "./board/useSeedComposerFromTaskDetails";
 import { useBoardDrawerStore } from "../boardDrawerStore";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
@@ -1624,6 +1625,12 @@ export default function ChatView(props: ChatViewProps) {
         : null,
   );
   const serverThread = useThreadShell(routeThreadRef);
+  useSeedComposerFromTaskDetails({
+    threadShell: serverThread,
+    threadKey: routeThreadKey,
+    threadRef: routeThreadRef,
+    enabled: routeKind === "server",
+  });
   const routeThreadDetailRef = resolveThreadDetailRef(routeThreadRef, {
     shellExists: serverThread !== null,
     waitForShell: draftThread !== null,

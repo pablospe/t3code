@@ -176,10 +176,29 @@ describe("resolveBoardColumn", () => {
 });
 
 describe("substituteBoardPromptPlaceholders", () => {
-  it("fills both placeholders with the card's title", () => {
-    expect(substituteBoardPromptPlaceholders("/opsx:propose {title} - {task}", "Fix it")).toBe(
-      "/opsx:propose Fix it - Fix it",
-    );
+  it("replaces every {title} with the card's title", () => {
+    expect(
+      substituteBoardPromptPlaceholders("/opsx:propose {title} - {title}", {
+        title: "Fix the board",
+      }),
+    ).toBe("/opsx:propose Fix the board - Fix the board");
+  });
+
+  it("fills {task} with the stored details", () => {
+    expect(
+      substituteBoardPromptPlaceholders("{title}\n\nTask: {task}", {
+        title: "Fix the board",
+        details: "Cards dropped on Planning must send the full brief.",
+      }),
+    ).toBe("Fix the board\n\nTask: Cards dropped on Planning must send the full brief.");
+  });
+
+  it("falls back to the title when details are missing or blank", () => {
+    for (const details of [undefined, null, "   "]) {
+      expect(substituteBoardPromptPlaceholders("{task}", { title: "Fix the board", details })).toBe(
+        "Fix the board",
+      );
+    }
   });
 });
 

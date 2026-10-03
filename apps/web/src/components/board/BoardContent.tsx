@@ -17,8 +17,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 
-import { useBoardPromptsStore } from "~/boardPromptsStore";
+import { resolvePromptsForThread, useBoardPromptsStore } from "~/boardPromptsStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
+import { useTaskDetailsSupport } from "~/hooks/useTaskDetailsSupport";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { useThreadActions } from "~/hooks/useThreadActions";
 import { useLastOpenThreadStore } from "~/lastOpenThreadStore";
@@ -48,7 +49,7 @@ import {
   resolveDoneReturnColumn,
   substituteBoardPromptPlaceholders,
 } from "./boardColumns.logic";
-import { BoardBacklogDialog } from "./BoardBacklogDialog";
+import { BoardBacklogDialog, type BoardBacklogTaskDraft } from "./BoardBacklogDialog";
 import {
   BoardActionButton,
   BoardCard,
@@ -73,6 +74,7 @@ function BoardColumnSection({
   onSnooze,
   onUnsnooze,
   onContextMenu,
+  onEditTask,
   onNewThread,
   onArchiveAll,
   now,
@@ -92,6 +94,8 @@ function BoardColumnSection({
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
   onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
+  /** Null for threads whose server cannot persist task fields. */
+  onEditTask: (thread: SidebarThreadSummary) => ((thread: SidebarThreadSummary) => void) | null;
   onNewThread: (() => void) | null;
   onArchiveAll: ((threads: ReadonlyArray<SidebarThreadSummary>) => void) | null;
   now: number;
@@ -172,6 +176,7 @@ function BoardColumnSection({
             onSnooze={onSnooze}
             onUnsnooze={onUnsnooze}
             onContextMenu={onContextMenu}
+            onEditTask={onEditTask(thread)}
             now={now}
           />
         ))}
@@ -221,7 +226,18 @@ export function BoardContent({
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   // Reported: a failed read cancels the approve drop, and the user should know why.
   const fetchThreadProjection = useAtomCommand(fetchThreadProjectionCommand, "Approve plan");
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const supportsTaskDetails = useTaskDetailsSupport();
   const [backlogDialogOpen, setBacklogDialogOpen] = useState(false);
+  /** Thread whose task fields the dialog is editing; null means create mode. */
+  const [editTask, setEditTask] = useState<SidebarThreadSummary | null>(null);
+  const editTaskFor = useCallback(
+    (thread: SidebarThreadSummary) =>
+      supportsTaskDetails(thread.environmentId) ? setEditTask : null,
+    [supportsTaskDetails],
+  );
   const [activeDrag, setActiveDrag] = useState<{
     thread: SidebarThreadSummary;
     column: BoardColumnKey;
@@ -438,6 +454,9 @@ export function BoardContent({
       // server completes the plan as the run is dispatched.
       sourcePlanId: PlanId | null = null,
     ) => {
+      // The card's stored details stay on the thread after use, so a later
+      // re-plan drop sends the same task text again.
+      const details = thread.taskDetails ?? undefined;
       // message.dispatch runs the thread's stored mode, so switching modes is
       // its own command, sent first exactly like the composer does.
       if (thread.interactionMode !== interactionMode) {
@@ -458,7 +477,7 @@ export function BoardContent({
           message: {
             messageId: newMessageId(),
             role: "user",
-            text: substituteBoardPromptPlaceholders(text, thread.title),
+            text: substituteBoardPromptPlaceholders(text, { title: thread.title, details }),
             attachments: [],
           },
           runtimeMode: thread.runtimeMode,
@@ -514,18 +533,20 @@ export function BoardContent({
       }
       // A run already in flight cannot be pushed into a new one.
       if (threadRuntimeIsActive(thread.runtime)) return;
+      // A task picked its own workflow at creation time; otherwise the board's.
+      const prompts = resolvePromptsForThread(thread.workflowPreset, boardPrompts);
       if (from === "backlog" && target === "planning") {
-        void startThreadTurn(thread, boardPrompts.backlogToPlanning, "plan");
+        void startThreadTurn(thread, prompts.backlogToPlanning, "plan");
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "planning") {
-        void startThreadTurn(thread, boardPrompts.reviewToPlanning, "plan");
+        void startThreadTurn(thread, prompts.reviewToPlanning, "plan");
         pinColumn(thread, "planning");
         return;
       }
       if (from === "review" && target === "running") {
-        void startThreadTurn(thread, boardPrompts.reviewToRunning, "default");
+        void startThreadTurn(thread, prompts.reviewToRunning, "default");
         pinColumn(thread, "running");
         return;
       }
@@ -534,7 +555,7 @@ export function BoardContent({
         pinColumn(thread, "running");
         void resolveActionablePlanId(thread).then((planId) => {
           if (planId === undefined) return;
-          return startThreadTurn(thread, boardPrompts.planningToRunning, "default", planId);
+          return startThreadTurn(thread, prompts.planningToRunning, "default", planId);
         });
       }
     },
@@ -599,12 +620,15 @@ export function BoardContent({
   // A backlog task is a thread with a title and no run: it sits in Backlog
   // until a drop starts it.
   const createBacklogTask = useCallback(
-    (title: string) => {
+    async ({ title, details, presetId }: BoardBacklogTaskDraft) => {
       if (!newTaskProject || !newTaskModelSelection) return;
-      void createThread({
+      // The id is minted here so the task's board fields can be patched onto
+      // the thread the create command produces.
+      const threadId = newThreadId();
+      const created = await createThread({
         environmentId: newTaskProject.environmentId,
         input: {
-          threadId: newThreadId(),
+          threadId,
           projectId: newTaskProject.id,
           title,
           modelSelection: newTaskModelSelection,
@@ -614,8 +638,59 @@ export function BoardContent({
           worktreePath: null,
         },
       });
+      // Nothing to say means no second command: a bare task rides the create
+      // alone rather than a no-op metadata update.
+      if (created._tag !== "Success" || (!details && !presetId)) return;
+      if (!supportsTaskDetails(newTaskProject.environmentId)) return;
+      void updateThreadMetadata({
+        environmentId: newTaskProject.environmentId,
+        input: {
+          threadId,
+          ...(details ? { taskDetails: details } : {}),
+          ...(presetId ? { workflowPreset: presetId } : {}),
+        },
+      });
     },
-    [createThread, newTaskProject, newTaskModelSelection],
+    [
+      createThread,
+      updateThreadMetadata,
+      newTaskProject,
+      newTaskModelSelection,
+      supportsTaskDetails,
+    ],
+  );
+
+  // Edit saves the task fields in one metadata update; empty details and the
+  // Default workflow clear the stored values rather than being skipped, so the
+  // dialog can undo what it wrote. The title rides along only when it changed.
+  const saveTaskEdit = useCallback(
+    (draft: BoardBacklogTaskDraft) => {
+      if (!editTask) return;
+      void updateThreadMetadata({
+        environmentId: editTask.environmentId,
+        input: {
+          threadId: editTask.id,
+          ...(draft.title !== editTask.title ? { title: draft.title } : {}),
+          taskDetails: draft.details.length > 0 ? draft.details : null,
+          workflowPreset: draft.presetId,
+        },
+      });
+    },
+    [editTask, updateThreadMetadata],
+  );
+
+  // Captured once per edit: shell updates while the dialog is open must not
+  // reseed what the user is typing.
+  const editInitial = useMemo(
+    () =>
+      editTask
+        ? {
+            title: editTask.title,
+            details: editTask.taskDetails ?? "",
+            presetId: editTask.workflowPreset ?? null,
+          }
+        : null,
+    [editTask],
   );
 
   if (!bootstrapped && threads.length === 0) {
@@ -672,6 +747,7 @@ export function BoardContent({
                 onSnooze={snooze}
                 onUnsnooze={unsnooze}
                 onContextMenu={showCardContextMenu}
+                onEditTask={editTaskFor}
                 onNewThread={column.definition.key === "backlog" ? openBacklogDialog : null}
                 onArchiveAll={column.definition.key === "done" ? archiveAll : null}
                 now={nowTick}
@@ -686,11 +762,21 @@ export function BoardContent({
         ) : null}
       </div>
       <BoardBacklogDialog
-        open={backlogDialogOpen}
-        onOpenChange={setBacklogDialogOpen}
+        open={backlogDialogOpen || editTask !== null}
+        onOpenChange={(next) => {
+          if (next) return;
+          setBacklogDialogOpen(false);
+          setEditTask(null);
+        }}
         projectTitle={newTaskProject?.title ?? null}
         modelAvailable={newTaskProject !== null && newTaskModelSelection !== null}
-        onSubmit={createBacklogTask}
+        initial={editInitial}
+        taskFieldsSupported={
+          editTask
+            ? supportsTaskDetails(editTask.environmentId)
+            : newTaskProject === null || supportsTaskDetails(newTaskProject.environmentId)
+        }
+        onSubmit={editTask ? saveTaskEdit : (draft) => void createBacklogTask(draft)}
       />
       {/* dropAnimation off: the source card never moved (the overlay is the
           dragged visual), so the default snap-back reads as a glitch. */}

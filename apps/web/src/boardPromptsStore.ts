@@ -55,12 +55,13 @@ export const DEFAULT_BOARD_PROMPTS: Record<BoardTransitionPromptKey, string> = {
 
 /** Whole-workflow prompt sets, so switching a board to a spec-driven flow is
     one click rather than four edits. The plain plan/implement flow is not a
-    preset: it is what the board-wide prompts default to, restored by the
-    editor's "Default" button. */
+    preset: it is what the board-wide prompts default to, and the picker's
+    "Default" option (no pinned preset, follows those prompts) covers it - a
+    pinned twin of it only ever confused. */
 export const BOARD_PROMPT_PRESETS: ReadonlyArray<{
   id: string;
   label: string;
-  /** Names what the workflow expects installed. */
+  /** Shown with the picker; names what the workflow expects installed. */
   description: string;
   prompts: Record<BoardTransitionPromptKey, string>;
 }> = [
@@ -77,6 +78,16 @@ export const BOARD_PROMPT_PRESETS: ReadonlyArray<{
     },
   },
 ];
+
+/** A task's own preset wins over the board-wide prompts; an id that no longer
+    resolves (preset removed since it was chosen) falls back to global. */
+export function resolvePromptsForThread(
+  presetId: string | null | undefined,
+  globalPrompts: Record<BoardTransitionPromptKey, string>,
+): Record<BoardTransitionPromptKey, string> {
+  if (!presetId) return globalPrompts;
+  return BOARD_PROMPT_PRESETS.find((preset) => preset.id === presetId)?.prompts ?? globalPrompts;
+}
 
 interface BoardPromptsState {
   prompts: Record<BoardTransitionPromptKey, string>;

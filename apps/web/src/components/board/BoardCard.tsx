@@ -4,11 +4,13 @@ import {
   ArchiveIcon,
   CheckIcon,
   ClockIcon,
+  FileTextIcon,
   Trash2Icon,
   Undo2Icon,
 } from "lucide-react";
 import { memo, type ReactNode, useMemo, useState } from "react";
 
+import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -80,15 +82,28 @@ function firstValidIsoTimestamp(
   return null;
 }
 
+/** A per-task workflow is worth naming in the details tooltip: it changes
+    what every drop on this card sends. */
+function presetLabelPrefix(presetId: string | null | undefined): string {
+  if (!presetId) return "";
+  const preset = BOARD_PROMPT_PRESETS.find((candidate) => candidate.id === presetId);
+  return preset ? `[${preset.label}] ` : "";
+}
+
 function BoardCardBody({
   thread,
   projectTitle,
   snoozedWakeLabel = null,
+  onEditTask = null,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string;
   /** When set, the card is snoozed: the status pill yields to a wake label. */
   snoozedWakeLabel?: string | null;
+  /** Interactive cards on servers with task fields pass this: the details
+      icon becomes an edit button (dimmed while the card has no details). The
+      drag preview passes nothing and keeps a passive icon. */
+  onEditTask?: (() => void) | null;
 }) {
   const pill = resolveThreadStatusPill({ thread });
   const activityAt = firstValidIsoTimestamp(
@@ -96,6 +111,15 @@ function BoardCardBody({
     thread.updatedAt,
     thread.createdAt,
   );
+  // Only a pinned preset earns a chip: Default follows the board-wide
+  // prompts, so labeling it on every card would be noise, not signal.
+  const workflowLabel =
+    BOARD_PROMPT_PRESETS.find((preset) => preset.id === thread.workflowPreset)?.label ?? null;
+  // Task details can run long, so the card reveals them on hover rather than
+  // spending card height on text the board does not need to read.
+  const detailsText = thread.taskDetails
+    ? `${presetLabelPrefix(thread.workflowPreset)}${thread.taskDetails}`
+    : null;
   return (
     <>
       <span className="block truncate pr-12 text-sm font-medium text-foreground">
@@ -114,6 +138,23 @@ function BoardCardBody({
         <span className="truncate">{projectTitle}</span>
         {thread.branch ? (
           <span className="min-w-0 shrink-[4] truncate">{thread.branch}</span>
+        ) : null}
+        {onEditTask !== null ? (
+          <BoardActionButton
+            label={detailsText ?? "Add task details"}
+            ariaLabel="Edit task details"
+            className={cn("size-auto p-0.5", detailsText === null && "opacity-40")}
+            onClick={onEditTask}
+          >
+            <FileTextIcon className="size-3" />
+          </BoardActionButton>
+        ) : detailsText !== null ? (
+          <FileTextIcon className="size-3 shrink-0" aria-label="Has task details" />
+        ) : null}
+        {workflowLabel !== null ? (
+          <span className="shrink-0 rounded bg-accent px-1 text-3xs leading-4 text-muted-foreground">
+            {workflowLabel}
+          </span>
         ) : null}
         {activityAt ? (
           <span className="ml-auto shrink-0">{formatRelativeTimeLabel(activityAt)}</span>
@@ -170,6 +211,7 @@ function BoardCardImpl({
   onSnooze,
   onUnsnooze,
   onContextMenu,
+  onEditTask,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string;
@@ -185,6 +227,9 @@ function BoardCardImpl({
   onSnooze: (thread: SidebarThreadSummary, preset: SnoozePreset) => void;
   onUnsnooze: (thread: SidebarThreadSummary) => void;
   onContextMenu: (thread: SidebarThreadSummary, position: { x: number; y: number }) => void;
+  /** Null when the thread's server predates task fields: the details icon
+      stays a passive indicator instead of a dead edit button. */
+  onEditTask: ((thread: SidebarThreadSummary) => void) | null;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -266,6 +311,7 @@ function BoardCardImpl({
           thread={thread}
           projectTitle={projectTitle}
           snoozedWakeLabel={snoozedWakeLabel}
+          onEditTask={onEditTask ? () => onEditTask(thread) : null}
         />
         <span
           className={cn(

@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
+
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -12,71 +14,178 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Textarea } from "../ui/textarea";
 
-/** Creates a board task: a titled thread that sits in Backlog. The thread
-    exists server-side from the moment it is named, but no run starts until
-    it is dragged out. */
+export interface BoardBacklogTaskDraft {
+  title: string;
+  /** Optional full task text, delivered as "{task}" when planning starts. */
+  details: string;
+  /** A BOARD_PROMPT_PRESETS id, or null to follow the board-wide prompts. */
+  presetId: string | null;
+}
+
+/** Select items cannot carry null, so the no-preset choice gets a sentinel.
+    "Default" here means no pinned preset: the task follows the board-wide
+    prompts (plain plan → implement unless customized in the pencil editor). */
+const DEFAULT_WORKFLOW_VALUE = "__default__";
+
+const WORKFLOW_OPTIONS: ReadonlyArray<{ value: string; label: string; description: string }> = [
+  {
+    value: DEFAULT_WORKFLOW_VALUE,
+    label: "Default",
+    description: "Follows the board-wide prompts (editable via the pencil on the board).",
+  },
+  ...BOARD_PROMPT_PRESETS.map(({ id, label, description }) => ({ value: id, label, description })),
+];
+
+/** Creates or edits a board task. Create makes a card that sits in Backlog:
+    the thread exists server-side from the moment it is named, but no run
+    starts until it is dragged out. Edit (opened from a card's details icon)
+    reuses the same form seeded with the thread's current task fields. Details
+    and workflow persist on the thread itself (taskDetails / workflowPreset),
+    so every client sees the same card. */
 export function BoardBacklogDialog({
   open,
   onOpenChange,
   projectTitle,
   modelAvailable,
+  taskFieldsSupported,
+  initial,
   onSubmit,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectTitle: string | null;
   modelAvailable: boolean;
-  onSubmit: (title: string) => void;
+  /** False when the target environment's server predates task fields: the
+      details and workflow inputs hide rather than silently not persisting. */
+  taskFieldsSupported: boolean;
+  /** When set, the dialog edits this task instead of creating one. */
+  initial: BoardBacklogTaskDraft | null;
+  onSubmit: (task: BoardBacklogTaskDraft) => void;
 }) {
-  const [title, setTitle] = useState("");
-  // Cleared on every close: a dialog that reopens holding the last task reads
-  // as a stuck form.
-  const handleOpenChange = (next: boolean) => {
-    if (!next) setTitle("");
-    onOpenChange(next);
-  };
-  const trimmed = title.trim();
-  const canSubmit = trimmed.length > 0 && modelAvailable;
-  const submit = () => {
-    if (!canSubmit) return;
-    onSubmit(trimmed);
-    handleOpenChange(false);
-  };
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>New backlog task</DialogTitle>
-          <DialogDescription>
-            {modelAvailable
-              ? `Created in ${projectTitle ?? "the default project"} - it stays in Backlog until started; drag to Planning starts planning it.`
-              : "No model available - start any thread once first."}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              submit();
-            }}
-          >
-            <Input
-              autoFocus
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="What needs doing?"
-              aria-label="Task title"
-            />
-          </form>
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" size="sm" />}>Cancel</DialogClose>
-          <Button size="sm" disabled={!canSubmit} onClick={submit}>
-            Create
-          </Button>
-        </DialogFooter>
+        {/* Mounted per open, so the form seeds from `initial` each time: blank
+            for create (a reopened form holding the last task reads as stuck),
+            the thread's current fields for edit. */}
+        <BoardTaskForm
+          projectTitle={projectTitle}
+          modelAvailable={modelAvailable}
+          taskFieldsSupported={taskFieldsSupported}
+          initial={initial}
+          onSubmit={(task) => {
+            onSubmit(task);
+            onOpenChange(false);
+          }}
+        />
       </DialogPopup>
     </Dialog>
+  );
+}
+
+function BoardTaskForm({
+  projectTitle,
+  modelAvailable,
+  taskFieldsSupported,
+  initial,
+  onSubmit,
+}: {
+  projectTitle: string | null;
+  modelAvailable: boolean;
+  taskFieldsSupported: boolean;
+  initial: BoardBacklogTaskDraft | null;
+  onSubmit: (task: BoardBacklogTaskDraft) => void;
+}) {
+  const editing = initial !== null;
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [details, setDetails] = useState(initial?.details ?? "");
+  const [presetId, setPresetId] = useState<string | null>(initial?.presetId ?? null);
+  const trimmed = title.trim();
+  const canSubmit = trimmed.length > 0 && (editing || modelAvailable);
+  const submit = () => {
+    if (!canSubmit) return;
+    onSubmit({ title: trimmed, details: details.trim(), presetId });
+  };
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{editing ? "Edit task" : "New backlog task"}</DialogTitle>
+        <DialogDescription>
+          {editing
+            ? "Changes save to the thread itself, so every client sees them."
+            : modelAvailable
+              ? `Created in ${projectTitle ?? "the default project"} - it stays in Backlog until started; drag to Planning starts planning it.`
+              : "No model available - start any thread once first."}
+        </DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <Input
+            autoFocus
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="What needs doing?"
+            aria-label="Task title"
+          />
+          {taskFieldsSupported ? (
+            <>
+              <Textarea
+                value={details}
+                onChange={(event) => setDetails(event.target.value)}
+                rows={4}
+                placeholder="Full task description delivered when planning starts (optional)"
+                aria-label="Task details"
+              />
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Workflow:</span>
+                  <Select
+                    modal={false}
+                    value={presetId ?? DEFAULT_WORKFLOW_VALUE}
+                    onValueChange={(value: string | null) =>
+                      setPresetId(value === DEFAULT_WORKFLOW_VALUE ? null : value)
+                    }
+                    items={WORKFLOW_OPTIONS}
+                  >
+                    <SelectTrigger size="xs" aria-label="Workflow">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {WORKFLOW_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </div>
+                <p className="mt-1 text-3xs text-muted-foreground/70">
+                  {
+                    WORKFLOW_OPTIONS.find(
+                      (option) => option.value === (presetId ?? DEFAULT_WORKFLOW_VALUE),
+                    )?.description
+                  }
+                </p>
+              </div>
+            </>
+          ) : null}
+        </form>
+      </DialogPanel>
+      <DialogFooter>
+        <DialogClose render={<Button variant="outline" size="sm" />}>Cancel</DialogClose>
+        <Button size="sm" disabled={!canSubmit} onClick={submit}>
+          {editing ? "Save" : "Create"}
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
