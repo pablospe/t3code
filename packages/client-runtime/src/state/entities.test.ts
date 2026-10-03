@@ -113,7 +113,8 @@ describe("V2 client presentation", () => {
         ...v2ThreadShell,
         externalSession: externalSession(status),
       });
-      expect(shell.runtime?.status).toBe("idle");
+      // No runtime, like a quiet thread: "idle" would read as waiting on background work.
+      expect(shell.runtime).toBeNull();
       expect(shell.externalSessionWaiting).toBeNull();
     }
   });
