@@ -34,6 +34,10 @@ const TranscriptRecord = Schema.Struct({
   isSidechain: Schema.optional(Schema.Boolean),
   isMeta: Schema.optional(Schema.Boolean),
   isCompactSummary: Schema.optional(Schema.Boolean),
+  /** Set on a message another session sent in; `body` is what the sender wrote. */
+  origin: Schema.optional(
+    Schema.Struct({ kind: Schema.optional(Schema.String), body: Schema.optional(Schema.String) }),
+  ),
   message: Schema.optional(
     Schema.Struct({
       model: Schema.optional(Schema.String),
@@ -120,7 +124,15 @@ export function parseAttachedTranscriptLine(
   if (Option.isNone(decoded)) return Option.none();
   const record = decoded.value;
   if (record.type !== "user" && record.type !== "assistant") return Option.none();
-  if (record.isSidechain === true || record.isMeta === true || record.isCompactSummary === true) {
+  // A message from another session, including one T3 sent, is recorded as a meta
+  // record with the sender's text in `origin.body` (Claude Code 2.1.288 and later).
+  const peerBody =
+    record.type === "user" && record.origin?.kind === "peer" ? record.origin.body : undefined;
+  if (
+    record.isSidechain === true ||
+    (record.isMeta === true && peerBody === undefined) ||
+    record.isCompactSummary === true
+  ) {
     return Option.none();
   }
   const uuid = record.uuid;
@@ -141,7 +153,12 @@ export function parseAttachedTranscriptLine(
     .trim();
   // A message T3 injected (or any cross-session message) is mirrored back
   // wrapped in a `<cross-session-message …>` tag. Show the clean text instead.
-  const text = role === "user" ? stripCrossSessionEnvelope(joinedText) : joinedText;
+  const text =
+    peerBody !== undefined
+      ? peerBody.trim()
+      : role === "user"
+        ? stripCrossSessionEnvelope(joinedText)
+        : joinedText;
   const images =
     role === "user"
       ? blocks.flatMap((block): ReadonlyArray<AttachedTranscriptImage> => {

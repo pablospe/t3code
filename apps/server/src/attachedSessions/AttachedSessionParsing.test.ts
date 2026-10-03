@@ -104,6 +104,34 @@ describe("parseAttachedTranscriptLine", () => {
     ]);
   });
 
+  it("reads the sender's text from a peer message recorded as meta", () => {
+    expect(
+      parse({
+        type: "user",
+        uuid: "peer",
+        isMeta: true,
+        origin: { kind: "peer", from: "uds:/x.sock", body: "ship it please" },
+        message: {
+          content:
+            'Another Claude session sent a message:\n<cross-session-message from="uds:/x.sock">\nship it please\n</cross-session-message>\n\nThis came from another Claude session.',
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        uuid: "peer",
+        text: "ship it please",
+        images: [],
+        createdAt: fallback,
+      },
+    ]);
+    // Other meta records are still CLI bookkeeping.
+    expect(
+      parse({ type: "user", uuid: "m", isMeta: true, message: { content: "x" } }),
+    ).toBeUndefined();
+  });
+
   it("strips a cross-session wrapper that carries a closing tag", () => {
     expect(
       parse({

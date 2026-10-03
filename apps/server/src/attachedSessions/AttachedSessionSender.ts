@@ -334,7 +334,7 @@ function describeSendFailure(cause: unknown): string {
 }
 
 /** The default send boundary: resolve the recipient + Claude, then relay. */
-const makeAgentSdkDeliver: Effect.Effect<
+export const makeAgentSdkDeliver: Effect.Effect<
   AttachedSessionDeliver,
   never,
   ServerSettingsService | ClaudeAgentsRoster | Path.Path
