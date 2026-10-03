@@ -50,6 +50,7 @@ import {
   type UnpinThreadInput,
   type WatchThreadPullRequestInput,
   type UnsettleThreadInput,
+  type SendExternalSessionMessageInput,
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
   type VisitThreadInput,
@@ -84,6 +85,7 @@ import {
   unlinkThreadPullRequest,
   unpinThread,
   unsettleThread,
+  sendExternalSessionMessage,
   unsnoozeThread,
   updateThreadMetadata,
   visitThread,
@@ -179,6 +181,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     unsettle: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:unsettle",
       execute: (input: UnsettleThreadInput) => unsettleThread(input),
+      scheduler,
+      concurrency,
+    }),
+    sendExternalSessionMessage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:send-external-session-message",
+      execute: (input: SendExternalSessionMessageInput) => sendExternalSessionMessage(input),
       scheduler,
       concurrency,
     }),

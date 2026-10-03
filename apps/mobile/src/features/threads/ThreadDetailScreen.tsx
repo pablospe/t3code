@@ -107,6 +107,7 @@ import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
+import { ExternalSessionComposer } from "./ExternalSessionComposer";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
@@ -372,6 +373,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   // A provider-native subagent shows status instead of a composer.
   const isProviderSubagent = isProviderNativeSubagentThread(props.selectedThread.source);
+  // A session running outside T3 (claude in a terminal) only takes messages.
+  const externalSession = props.selectedThread.source.externalSession ?? null;
   // Entering edit mode from the queue sheet should land in a ready composer,
   // not require a second tap on a composer already holding the message.
   const editingRunId = props.queuedRunEdit?.runId ?? null;
@@ -1295,6 +1298,21 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                                 threadId: String(props.selectedThread.lineage.parentThreadId),
                               })
                       }
+                    />
+                  </View>
+                ) : externalSession !== null ? (
+                  <View
+                    className="self-center px-3 pt-1.5"
+                    style={{
+                      width: "100%",
+                      maxWidth: contentMaxWidth,
+                      paddingBottom: composerBottomInset + 6,
+                    }}
+                  >
+                    <ExternalSessionComposer
+                      environmentId={props.environmentId}
+                      threadId={props.selectedThread.id}
+                      activity={externalSession.activity}
                     />
                   </View>
                 ) : (

@@ -210,6 +210,10 @@ export interface RevertThreadCheckpointInput extends ThreadCommandInput {
 
 export type StopThreadSessionInput = ThreadCommandInput;
 
+export interface SendExternalSessionMessageInput extends ThreadCommandInput {
+  readonly text: string;
+}
+
 export interface ForkThreadFromRunInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
@@ -506,6 +510,24 @@ export const unsettleThread = Effect.fn("EnvironmentCommands.unsettleThread")(fu
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     reason: input.reason,
+  });
+});
+
+/**
+ * Hands a message to the session an external-session thread mirrors (a Claude
+ * CLI session in a terminal, for example). It starts no run: the server relays
+ * it, and the message appears in the thread once the session records it.
+ */
+export const sendExternalSessionMessage = Effect.fn(
+  "EnvironmentCommands.sendExternalSessionMessage",
+)(function* (input: SendExternalSessionMessageInput) {
+  return yield* dispatch({
+    type: "thread.external-session.message.send",
+    createdBy: "user",
+    creationSource: input.creationSource ?? "web",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    text: input.text,
   });
 });
 

@@ -416,6 +416,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "attached-sessions",
+    title: "Terminal Claude sessions",
+    to: "/settings/general",
+    searchTerms: ["attached mirror claude cli terminal tmux sessions outside external"],
+    scope: "environment-defaults",
+  },
+  {
     id: "continue-threads-after-server-update",
     title: "Continue threads after restarts",
     to: "/settings/general",

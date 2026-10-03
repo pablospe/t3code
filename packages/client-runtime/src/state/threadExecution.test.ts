@@ -22,6 +22,7 @@ import {
   deriveLatestThreadRun,
   deriveProviderSubagentStatus,
   formatModelSelectionEffort,
+  formatExternalSessionActivity,
   formatProviderSubagentStatus,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
@@ -333,6 +334,59 @@ describe("deriveRunlessWorkStartedAt", () => {
     expect(
       deriveRunlessWorkStartedAt({ ...v2Projection, nodes: [rootTurn("running")] }),
     ).toBeNull();
+  });
+});
+
+describe("deriveRunlessWorkStartedAt for external sessions", () => {
+  const mirrored = (status: "running" | "waiting" | "idle" | "ended") => ({
+    ...v2Projection,
+    thread: {
+      ...v2Projection.thread,
+      externalSession: {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        nativeSessionId: "terminal-session",
+        activity: {
+          status,
+          waitingReason: null,
+          workStartedAt: status === "idle" ? null : "2026-07-28T10:05:00.000Z",
+        },
+      },
+    },
+  });
+
+  it.each(["running", "waiting"] as const)("times the session while it is %s", (status) => {
+    expect(deriveRunlessWorkStartedAt(mirrored(status))).toBe("2026-07-28T10:05:00.000Z");
+  });
+
+  it.each(["idle", "ended"] as const)("is idle once the session is %s", (status) => {
+    expect(deriveRunlessWorkStartedAt(mirrored(status))).toBeNull();
+  });
+});
+
+describe("formatExternalSessionActivity", () => {
+  const startedAt = "2026-07-28T10:00:00.000Z";
+  const nowMs = Date.parse("2026-07-28T10:02:05.400Z");
+
+  it("names what the terminal session is doing", () => {
+    expect(formatExternalSessionActivity(null, nowMs)).toBe("Terminal session");
+    expect(
+      formatExternalSessionActivity(
+        { status: "running", waitingReason: null, workStartedAt: startedAt },
+        nowMs,
+      ),
+    ).toBe("Working 2m 5s");
+    expect(
+      formatExternalSessionActivity(
+        { status: "waiting", waitingReason: "permission prompt", workStartedAt: startedAt },
+        nowMs,
+      ),
+    ).toBe("Waiting for you in the terminal: permission prompt");
+    expect(
+      formatExternalSessionActivity(
+        { status: "ended", waitingReason: null, workStartedAt: null },
+        nowMs,
+      ),
+    ).toBe("Session ended");
   });
 });
 

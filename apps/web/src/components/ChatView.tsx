@@ -415,6 +415,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
+import { ExternalSessionComposer } from "./chat/ExternalSessionComposer";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
 import {
@@ -2052,6 +2053,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isProviderSubagent =
     serverThread !== null && isProviderNativeSubagentThread(serverThread.source);
+  // A session running outside T3 (claude in a terminal); the projection is fresher than the shell.
+  const externalSession =
+    serverProjection?.thread.externalSession ?? serverThread?.source.externalSession ?? null;
   const supportsProviderSwitchingViaHandoff = useMemo(
     () => threadSupportsProviderHandoff(serverProjection),
     [serverProjection],
@@ -4067,7 +4071,11 @@ export default function ChatView(props: ChatViewProps) {
   // composer and its strips. Its approvals and questions are asked on the
   // top-level parent thread.
   const showProviderSubagentBar = isProviderSubagent;
-  const composerMounted = !showProviderSubagentBar;
+  // A session running outside T3 only takes messages, so a small composer that
+  // hands them to it replaces this one and its strips.
+  const showExternalSessionComposer = externalSession !== null;
+  const composerReplaced = showProviderSubagentBar || showExternalSessionComposer;
+  const composerMounted = !composerReplaced;
   const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
   // Providers can report a dated id or alias (claude-haiku-4-5-20251001).
   const providerSubagentModelSlug = selectedProviderEntry
@@ -4094,7 +4102,7 @@ export default function ChatView(props: ChatViewProps) {
   const mountComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
-    hasActiveProject: activeProject !== null && !showProviderSubagentBar,
+    hasActiveProject: activeProject !== null && !composerReplaced,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server",
@@ -4102,13 +4110,13 @@ export default function ChatView(props: ChatViewProps) {
   const showComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
-    hasActiveProject: activeProject !== null && !showProviderSubagentBar,
+    hasActiveProject: activeProject !== null && !composerReplaced,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
   });
   const mountComposerModelStrip =
-    routeKind === "server" && !mountComposerContextStrip && !showProviderSubagentBar;
+    routeKind === "server" && !mountComposerContextStrip && !composerReplaced;
   const showComposerModelStrip = mountComposerModelStrip && restingComposerControlsVisible;
   const terminalShortcutLabelOptions = useMemo(
     () => ({
@@ -10855,6 +10863,13 @@ export default function ChatView(props: ChatViewProps) {
                                   ? () => onOpenRelatedThread(parentThreadLink.threadId)
                                   : null
                               }
+                            />
+                          ) : null}
+                          {showExternalSessionComposer && activeThread ? (
+                            <ExternalSessionComposer
+                              environmentId={activeThread.environmentId}
+                              threadId={activeThread.id}
+                              activity={externalSession.activity}
                             />
                           ) : null}
                           {!composerMounted ? null : (

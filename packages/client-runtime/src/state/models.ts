@@ -190,6 +190,26 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   };
 }
 
+/**
+ * External-session threads have no runs. The mirrored session's activity
+ * stands in for one, so lists show it working, with its timer, like any run.
+ */
+function externalSessionRuntime(
+  thread: OrchestrationV2ThreadShell,
+  activity: NonNullable<NonNullable<OrchestrationV2ThreadShell["externalSession"]>["activity"]>,
+): ThreadRuntimeSummary {
+  return {
+    status:
+      activity.status === "running" || activity.status === "waiting" ? activity.status : "idle",
+    activeRunId: null,
+    activityStartedAt: activity.workStartedAt,
+    providerInstanceId: thread.providerInstanceId,
+    providerName: null,
+    lastError: null,
+    updatedAt: iso(thread.updatedAt),
+  };
+}
+
 export function scopeProject(
   environmentId: EnvironmentId,
   project: OrchestrationProjectShell,
@@ -202,6 +222,7 @@ export function presentThreadShell(
   thread: OrchestrationV2ThreadShell,
 ): EnvironmentThreadShell {
   const updatedAt = iso(thread.updatedAt);
+  const externalActivity = thread.externalSession?.activity ?? null;
   const latestRun =
     thread.latestRunId === null
       ? null
@@ -239,12 +260,17 @@ export function presentThreadShell(
     forkedFrom: thread.forkedFrom,
     activeProviderThreadId: thread.activeProviderThreadId,
     latestRun,
-    runtime: shellRuntime(thread),
+    runtime:
+      externalActivity === null
+        ? shellRuntime(thread)
+        : externalSessionRuntime(thread, externalActivity),
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
     hasPendingApprovals:
-      thread.pendingRuntimeRequest !== null &&
-      thread.pendingRuntimeRequest.kind !== "user_input" &&
-      thread.pendingRuntimeRequest.kind !== "auth_refresh",
+      // A waiting external session needs the user where it runs.
+      externalActivity?.status === "waiting" ||
+      (thread.pendingRuntimeRequest !== null &&
+        thread.pendingRuntimeRequest.kind !== "user_input" &&
+        thread.pendingRuntimeRequest.kind !== "auth_refresh"),
     hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
