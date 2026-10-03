@@ -130,6 +130,9 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly regenerateTitle?: boolean;
   /** Link (object) or unlink (null) a pull request (#8160). */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
+  /** Board task fields: a value sets, null clears. Needs the threadTaskDetails capability. */
+  readonly taskDetails?: string | null;
+  readonly workflowPreset?: string | null;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -562,7 +565,9 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.worktreePath !== undefined ||
       input.regenerateTitle !== undefined ||
       input.linkedPullRequest !== undefined ||
-      input.limitRecovery !== undefined
+      input.limitRecovery !== undefined ||
+      input.taskDetails !== undefined ||
+      input.workflowPreset !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
@@ -576,6 +581,8 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.linkedPullRequest === undefined
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
+        ...(input.taskDetails === undefined ? {} : { taskDetails: input.taskDetails }),
+        ...(input.workflowPreset === undefined ? {} : { workflowPreset: input.workflowPreset }),
       });
     }
     if (input.modelSelection !== undefined) {

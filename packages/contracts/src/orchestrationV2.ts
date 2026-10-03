@@ -354,6 +354,16 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * Board task fields: the task text a backlog card shows and the composer is
+ * seeded with before the first run, and the drop-prompt preset chosen for it.
+ * Optional so payloads from servers without them still decode.
+ */
+const OrchestrationV2ThreadTaskFields = {
+  taskDetails: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workflowPreset: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+};
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -371,6 +381,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  ...OrchestrationV2ThreadTaskFields,
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
@@ -1698,6 +1709,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  ...OrchestrationV2ThreadTaskFields,
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2578,6 +2590,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Board task fields: a value sets, null clears, absent leaves unchanged. */
+    ...OrchestrationV2ThreadTaskFields,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),

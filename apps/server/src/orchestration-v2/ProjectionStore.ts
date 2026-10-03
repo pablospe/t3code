@@ -1357,6 +1357,12 @@ export function threadShellFromProjection(
     ...(projection.thread.activeOrderKey === undefined
       ? {}
       : { activeOrderKey: projection.thread.activeOrderKey }),
+    ...(projection.thread.taskDetails == null
+      ? {}
+      : { taskDetails: projection.thread.taskDetails }),
+    ...(projection.thread.workflowPreset == null
+      ? {}
+      : { workflowPreset: projection.thread.workflowPreset }),
     lineage: projection.thread.lineage,
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
@@ -1590,6 +1596,12 @@ function shellFromState(input: {
     ...(input.state.thread.activeOrderKey === undefined
       ? {}
       : { activeOrderKey: input.state.thread.activeOrderKey }),
+    ...(input.state.thread.taskDetails == null
+      ? {}
+      : { taskDetails: input.state.thread.taskDetails }),
+    ...(input.state.thread.workflowPreset == null
+      ? {}
+      : { workflowPreset: input.state.thread.workflowPreset }),
     lineage: input.state.thread.lineage,
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,

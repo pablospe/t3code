@@ -418,6 +418,34 @@ describe("orchestration V2 contracts", () => {
     expect(event.payload.id).toBe(RunId.make("run-1"));
   });
 
+  it("decodes board task fields on thread.metadata.update: trimmed, null clears, absent keeps", () => {
+    const decodeTask = (fields: Record<string, unknown>) => {
+      const command = decodeOrchestrationV2Command({
+        type: "thread.metadata.update",
+        commandId: "command-task",
+        threadId: "thread-1",
+        ...fields,
+      });
+      if (command.type !== "thread.metadata.update") throw new Error(command.type);
+      return { taskDetails: command.taskDetails, workflowPreset: command.workflowPreset };
+    };
+    expect(
+      decodeTask({ taskDetails: "  Ship the board\nwith details  ", workflowPreset: "openspec" }),
+    ).toEqual({
+      taskDetails: "Ship the board\nwith details",
+      workflowPreset: "openspec",
+    });
+    expect(decodeTask({ taskDetails: null, workflowPreset: null })).toEqual({
+      taskDetails: null,
+      workflowPreset: null,
+    });
+    expect(decodeTask({ title: "Renamed" })).toEqual({
+      taskDetails: undefined,
+      workflowPreset: undefined,
+    });
+    expect(() => decodeTask({ taskDetails: "   " })).toThrow();
+  });
+
   it("decodes app-owned delegated task commands", () => {
     const command = decodeOrchestrationV2Command({
       type: "delegated_task.request",
