@@ -354,6 +354,18 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * A session that runs outside T3 Code, such as a `claude` CLI session in a
+ * terminal, mirrored into this thread. The outside process stays its owner: T3
+ * never starts, resumes, forks or steers it, and a message reaches it only
+ * through `thread.external-session.message.send`.
+ */
+export const OrchestrationV2ExternalSession = Schema.Struct({
+  driver: ProviderDriverKind,
+  nativeSessionId: TrimmedNonEmptyString,
+});
+export type OrchestrationV2ExternalSession = typeof OrchestrationV2ExternalSession.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -373,6 +385,9 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  /** Set when the thread mirrors a session T3 does not own. Optional so older
+      payloads still decode, and older clients ignore it. */
+  externalSession: Schema.optional(Schema.NullOr(OrchestrationV2ExternalSession)),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -441,6 +456,13 @@ export function isProviderNativeSubagentThread(
   thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
 ): boolean {
   return thread.lineage.relationshipToParent === "subagent" && thread.creationSource === "provider";
+}
+
+/** A thread mirroring a session T3 does not own (see OrchestrationV2ExternalSession). */
+export function isExternalSessionThread(
+  thread: Pick<OrchestrationV2AppThread, "externalSession">,
+): boolean {
+  return thread.externalSession !== undefined && thread.externalSession !== null;
 }
 
 export const OrchestrationV2RunStatus = Schema.Literals([
@@ -2862,6 +2884,19 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     modelSelection: ModelSelection,
+  }),
+  /**
+   * Hands a message to the session an external-session thread mirrors. It is
+   * not a run: delivery happens after the command commits, the mirror shows the
+   * message once the session records it, and a failed delivery leaves a notice
+   * on the thread.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.external-session.message.send"),
+    ...OrchestrationV2CreationFields,
+    commandId: CommandId,
+    threadId: ThreadId,
+    text: TrimmedNonEmptyString,
   }),
 ]);
 export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
