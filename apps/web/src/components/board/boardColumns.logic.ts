@@ -90,7 +90,9 @@ export function resolveBoardColumn(thread: BoardThreadInput): BoardColumnKey {
 
   // "waiting" is a stopped run whose background work (subagents, monitors)
   // will wake it: still the agent's turn, not the user's.
-  const active = status === "working" || status === "waiting";
+  // "terminal" is a mirrored session waiting on its user in the terminal;
+  // those return above, but the status still means the work is not done.
+  const active = status === "working" || status === "waiting" || status === "terminal";
   if (thread.settledOverride === "settled" && !active) {
     return "done";
   }

@@ -12,6 +12,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadFixture } from "~/test-fixtures";
 
+import { resolveSidebarThreadStatus } from "../Sidebar.logic";
+
 import {
   BOARD_COLUMNS,
   groupThreadsIntoBoardColumns,
@@ -203,6 +205,12 @@ describe("terminal-session threads", () => {
     expect(resolveBoardColumn(terminalSession("ended"))).toBe("done");
     // Not yet seen by the server: quiet, so ready for review.
     expect(resolveBoardColumn(terminalSession())).toBe("review");
+  });
+
+  it("keeps a session waiting in the terminal in running, as the sidebar marks it", () => {
+    const waiting = terminalSession("waiting");
+    expect(resolveSidebarThreadStatus(waiting)).toBe("terminal");
+    expect(resolveBoardColumn(waiting)).toBe("running");
   });
 
   it("still honors archive and an explicit settle", () => {
