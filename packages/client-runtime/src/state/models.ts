@@ -193,16 +193,19 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
 }
 
 /**
- * External-session threads have no runs. The mirrored session's activity
- * stands in for one, so lists show it working, with its timer, like any run.
+ * External-session threads have no runs. While the mirrored session works or
+ * waits, its activity stands in for one, so lists show it working, with its
+ * timer, like any run. An idle or ended session has no runtime at all, like a
+ * quiet thread: a runtime of "idle" would read as a stopped run whose
+ * background work will wake it.
  */
 function externalSessionRuntime(
   thread: OrchestrationV2ThreadShell,
   activity: NonNullable<NonNullable<OrchestrationV2ThreadShell["externalSession"]>["activity"]>,
-): ThreadRuntimeSummary {
+): ThreadRuntimeSummary | null {
+  if (activity.status !== "running" && activity.status !== "waiting") return null;
   return {
-    status:
-      activity.status === "running" || activity.status === "waiting" ? activity.status : "idle",
+    status: activity.status,
     activeRunId: null,
     activityStartedAt: activity.workStartedAt,
     providerInstanceId: thread.providerInstanceId,

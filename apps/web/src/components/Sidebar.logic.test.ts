@@ -61,7 +61,14 @@ import {
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -2075,6 +2082,35 @@ describe("navigation after parking a thread", () => {
       ).toBe(expected);
     },
   );
+});
+
+describe("mirrored terminal sessions", () => {
+  const presentSession = (status: "running" | "waiting" | "idle" | "ended") =>
+    presentThreadShell(localEnvironmentId, {
+      ...makeThreadFixture().source,
+      latestRunId: null,
+      activeProviderThreadId: null,
+      externalSession: {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        nativeSessionId: "terminal-session",
+        activity: {
+          status,
+          waitingReason: status === "waiting" ? "permission prompt" : null,
+          workStartedAt:
+            status === "running" || status === "waiting" ? "2026-06-20T01:00:00.000Z" : null,
+        },
+      },
+    });
+
+  it.each(["running", "waiting"] as const)("reads a %s session as working", (status) => {
+    expect(resolveSidebarThreadStatus(presentSession(status))).toBe("working");
+  });
+
+  it.each(["idle", "ended"] as const)("reads an %s session as resting, not busy", (status) => {
+    const thread = presentSession(status);
+    expect(resolveSidebarThreadStatus(thread)).toBe("ready");
+    expect(resolveThreadStatusPill({ thread })).toBeNull();
+  });
 });
 
 describe("unseen completion with background work", () => {
