@@ -14,9 +14,11 @@ import {
   ProviderDriverKind,
   ThreadId,
   attachedClaudeThreadId,
+  OrchestrationV2ShellStreamItem,
   type OrchestrationV2AppThread,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -31,6 +33,7 @@ import * as LegacyV1ThreadImporter from "../orchestration-v2/legacy/LegacyV1Thre
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import { buildActiveShellSnapshot } from "../orchestration-v2/ShellStream.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -47,6 +50,7 @@ const T3_OWNED = "22222222-2222-4222-8222-222222222222";
 const LEGACY = "33333333-3333-4333-8333-333333333333";
 const OBSERVER = "44444444-4444-4444-8444-444444444444";
 const RESUMED = "55555555-5555-4555-8555-555555555555";
+const IDLE = "66666666-6666-4666-8666-666666666666";
 const projectId = ProjectId.make("project:attached");
 
 const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-attached-sessions-"));
@@ -482,6 +486,40 @@ it.effect("brings a settled thread back when its session resumes, whatever the c
       assert.equal(projection.thread.settledOverride, "active");
       assert.equal(projection.thread.externalSession?.activity?.status, "running");
     }).pipe(Effect.provide(makeTestLayer({ roster, sends, legacyImports, enabled: false })));
+  });
+});
+
+it.effect("an idle terminal session reaches clients with its marker on the thread shell", () => {
+  appendTranscript(IDLE, userText("i1", "resting"));
+  return Effect.gen(function* () {
+    const roster = yield* Ref.make<ReadonlyArray<ClaudeAgentsRosterEntry>>([
+      rosterEntry(IDLE, "idle"),
+    ]);
+    const sends = yield* Ref.make<ReadonlyArray<AttachedSessionSendInput>>([]);
+    const legacyImports = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+    yield* Effect.gen(function* () {
+      const mirror = yield* AttachedSessions.AttachedSessions;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* mirror.sweep("roster").pipe(Effect.andThen(mirror.drain));
+
+      // The snapshot the WS and HTTP shell endpoints serve, through the RPC JSON codec.
+      const threads = yield* orchestrator.getShellSnapshot({ location: "active" });
+      const item: OrchestrationV2ShellStreamItem = {
+        kind: "snapshot",
+        snapshot: buildActiveShellSnapshot({ projects: [], threads, snapshotSequence: 1 }),
+      };
+      const wire = Schema.fromJsonString(Schema.toCodecJson(OrchestrationV2ShellStreamItem));
+      const decoded = yield* Schema.decodeUnknownEffect(wire)(
+        yield* Schema.encodeUnknownEffect(wire)(item),
+      );
+      assert.equal(decoded.kind, "snapshot");
+      const shell =
+        decoded.kind === "snapshot"
+          ? decoded.snapshot.threads.find((thread) => thread.id === attachedClaudeThreadId(IDLE))
+          : undefined;
+      assert.deepInclude(shell?.externalSession, { nativeSessionId: IDLE });
+      assert.equal(shell?.externalSession?.activity?.status, "idle");
+    }).pipe(Effect.provide(makeTestLayer({ roster, sends, legacyImports })));
   });
 });
 
