@@ -127,6 +127,13 @@ interface TrackedSession {
   settled: boolean;
   /** Not persisted: whether a thread imported from V1 has its history in place. */
   historyReady: boolean;
+  /**
+   * Not persisted: the session just came (back) to life with a thread that
+   * already existed, so a settled thread returns to the active list. Decided
+   * from the thread itself, which an earlier mirror or the user may have
+   * settled without this cursor knowing.
+   */
+  revived: boolean;
 }
 
 const isActiveStatus = (status: AttachedActivityStatus | null) =>
@@ -243,6 +250,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
             paused: false,
             settled: cursor.settled ?? false,
             historyReady: false,
+            revived: false,
           },
         ]),
       );
@@ -497,6 +505,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         paused: false,
         settled: false,
         historyReady: false,
+        revived: false,
       };
       all.set(entry.sessionId, session);
       cursorsDirty = true;
@@ -507,6 +516,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
         // The cursor was lost. Nothing says how much of the transcript is already
         // on the thread, so carry on from its end rather than risk repeating it.
         session.offset = size;
+        session.revived = true;
         yield* adoptLegacyThread(session, existing.value);
         return session;
       }
@@ -714,9 +724,9 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       for (const entry of live.values()) {
         const known = all.get(entry.sessionId);
         // Resumed in the terminal: the thread comes back to the active list.
-        const resumed = known !== undefined && known.endedAt !== null;
-        if (resumed) {
+        if (known !== undefined && known.endedAt !== null) {
           known.endedAt = null;
+          known.revived = true;
           cursorsDirty = true;
         }
         yield* Effect.gen(function* () {
@@ -732,7 +742,14 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
             onSome: (value) => value.archivedAt !== null || value.deletedAt !== null,
           });
           if (session.paused) return;
-          if (resumed && session.settled) yield* unsettleThread(session);
+          if (session.revived) {
+            const settled = Option.exists(
+              thread,
+              (value) => value.settledOverride === "settled" || value.settledAt !== null,
+            );
+            if (settled) yield* unsettleThread(session);
+            session.revived = false;
+          }
           yield* applyStatus(session, attachedActivityStatus(entry.status), entry.waitingFor);
         }).pipe(
           Effect.catch((cause) =>

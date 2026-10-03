@@ -47,6 +47,31 @@ interface ClaudeAgentsRosterSnapshot {
   readonly configDir: string;
 }
 
+const STATUS_RANK = { busy: 2, waiting: 1, idle: 0 } as const;
+
+/**
+ * One entry per session. Two processes can run the same session (a resumed
+ * copy in another terminal), and the roster lists each. The session reads as
+ * its most active process (busy, then waiting, then idle), and that process
+ * also gives the name messages are addressed to, since it is the one the user
+ * is working in. Ties go to the most recently started process.
+ */
+function mergeSessionProcesses(
+  entries: ReadonlyArray<ClaudeAgentsRosterEntry>,
+): ReadonlyArray<ClaudeAgentsRosterEntry> {
+  const bySession = new Map<string, ClaudeAgentsRosterEntry>();
+  for (const entry of entries) {
+    const current = bySession.get(entry.sessionId);
+    const wins =
+      current === undefined ||
+      STATUS_RANK[entry.status] > STATUS_RANK[current.status] ||
+      (STATUS_RANK[entry.status] === STATUS_RANK[current.status] &&
+        (entry.startedAt ?? 0) > (current.startedAt ?? 0));
+    if (wins) bySession.set(entry.sessionId, entry);
+  }
+  return [...bySession.values()];
+}
+
 /** Only the human-driven sessions; T3 Code's own SDK sessions are not `interactive`. */
 export function parseClaudeAgentsRoster(
   stdout: string,
@@ -54,23 +79,25 @@ export function parseClaudeAgentsRoster(
   const parsed = decodeJson(stdout);
   if (Option.isNone(parsed) || !Array.isArray(parsed.value)) return Option.none();
   return Option.some(
-    parsed.value.flatMap((value): ReadonlyArray<ClaudeAgentsRosterEntry> => {
-      const entry = decodeRosterEntry(value);
-      if (Option.isNone(entry) || entry.value.kind !== "interactive") return [];
-      const { sessionId, cwd, status } = entry.value;
-      if (sessionId.trim().length === 0 || cwd.trim().length === 0) return [];
-      return [
-        {
-          sessionId,
-          cwd,
-          name: entry.value.name?.trim() || null,
-          // An unknown status is a CLI we do not understand yet. Idle is the quiet reading.
-          status: status === "busy" || status === "waiting" ? status : "idle",
-          waitingFor: entry.value.waitingFor?.trim() || null,
-          startedAt: entry.value.startedAt ?? null,
-        },
-      ];
-    }),
+    mergeSessionProcesses(
+      parsed.value.flatMap((value): ReadonlyArray<ClaudeAgentsRosterEntry> => {
+        const entry = decodeRosterEntry(value);
+        if (Option.isNone(entry) || entry.value.kind !== "interactive") return [];
+        const { sessionId, cwd, status } = entry.value;
+        if (sessionId.trim().length === 0 || cwd.trim().length === 0) return [];
+        return [
+          {
+            sessionId,
+            cwd,
+            name: entry.value.name?.trim() || null,
+            // An unknown status is a CLI we do not understand yet. Idle is the quiet reading.
+            status: status === "busy" || status === "waiting" ? status : "idle",
+            waitingFor: entry.value.waitingFor?.trim() || null,
+            startedAt: entry.value.startedAt ?? null,
+          },
+        ];
+      }),
+    ),
   );
 }
 

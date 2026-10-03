@@ -16,7 +16,9 @@
  * `ListAgents` tool never exposes sessionIds. So before relaying we resolve the
  * thread's sessionId to the session's current name via the roster
  * (`claude agents --json`, which carries both), and fail fast when the session
- * is no longer running rather than relaying blindly.
+ * is no longer running rather than relaying blindly. When two processes run the
+ * same session, the roster keeps the most active one, so the message goes to the
+ * terminal the user is working in.
  *
  * A completed relay run is NOT proof of delivery: the relay can finish without
  * ever calling `SendMessage`, or its `SendMessage` can error or be held by the
