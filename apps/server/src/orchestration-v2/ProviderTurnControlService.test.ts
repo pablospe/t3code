@@ -227,7 +227,7 @@ it.effect(
           getTimelinePage: () => Effect.die("Unused timeline read"),
           getMessageCount: () => Effect.die("unused message count"),
           getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
-          getProviderThreadOwner: () => Effect.die("unused provider thread owner read"),
+          getNativeThreadOwner: () => Effect.die("unused native thread owner read"),
           getThreadRecords: () => Effect.die("unused record read"),
           getRuntimeRequest: () => Effect.die("unused getRuntimeRequest"),
           getRunningTurnContext: () => Effect.die("unused getRunningTurnContext"),

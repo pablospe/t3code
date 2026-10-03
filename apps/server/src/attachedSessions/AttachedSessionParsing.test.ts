@@ -6,7 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 
 import { loadAttachedSessionCursors } from "./AttachedSessionCursors.ts";
 import { parseAttachedTranscriptLine } from "./AttachedSessionTranscript.ts";
-import { parseClaudeAgentsRoster } from "./ClaudeAgentsRoster.ts";
+import { descendantPids, parseClaudeAgentsRoster } from "./ClaudeAgentsRoster.ts";
 
 describe("parseClaudeAgentsRoster", () => {
   it("keeps interactive sessions and drops entries it cannot read", () => {
@@ -36,6 +36,8 @@ describe("parseClaudeAgentsRoster", () => {
         status: "waiting",
         waitingFor: "permission prompt",
         startedAt: null,
+        pid: 1,
+        spawnedByServer: false,
       },
       {
         sessionId: "c",
@@ -44,6 +46,8 @@ describe("parseClaudeAgentsRoster", () => {
         status: "idle",
         waitingFor: null,
         startedAt: null,
+        pid: null,
+        spawnedByServer: false,
       },
     ]);
   });
@@ -75,6 +79,25 @@ describe("parseClaudeAgentsRoster", () => {
     // Equally active: the most recently started process.
     expect(merged(process("old", "idle", 1), process("new", "idle", 2))).toEqual([
       expect.objectContaining({ name: "new" }),
+    ]);
+  });
+
+  it("marks sessions whose process descends from this server", () => {
+    // 100 is the server; it ran 200, whose shell started claude 300. 400 is a terminal.
+    const table = "  100     1\n  200   100\n  300   200\n  400    50\n garbage\n";
+    expect([...descendantPids(table, 100)].toSorted()).toEqual([200, 300]);
+    const roster = Option.getOrThrow(
+      parseClaudeAgentsRoster(
+        JSON.stringify([
+          { sessionId: "run", cwd: "/repo", kind: "interactive", status: "busy", pid: 300 },
+          { sessionId: "terminal", cwd: "/repo", kind: "interactive", status: "busy", pid: 400 },
+        ]),
+        descendantPids(table, 100),
+      ),
+    );
+    expect(roster.map((entry) => [entry.sessionId, entry.spawnedByServer])).toEqual([
+      ["run", true],
+      ["terminal", false],
     ]);
   });
 

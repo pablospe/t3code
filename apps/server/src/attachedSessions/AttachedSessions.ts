@@ -668,11 +668,42 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       cursorsDirty = true;
     });
 
+    /**
+     * The mirror took a session T3 runs itself. Its thread is a duplicate of
+     * the real one, so it is archived (not deleted, so nothing is lost), and
+     * the session is no longer tracked.
+     */
+    const disown = Effect.fn("AttachedSessions.disown")(function* (
+      session: TrackedSession,
+      all: Map<string, TrackedSession>,
+    ) {
+      const thread = yield* loadThread(session.threadId);
+      if (
+        Option.isSome(thread) &&
+        thread.value.archivedAt === null &&
+        thread.value.deletedAt === null
+      ) {
+        yield* orchestrator.dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make(`attached:${session.sessionId}:disown`),
+          threadId: session.threadId,
+        });
+      }
+      all.delete(session.sessionId);
+      cursorsDirty = true;
+      yield* Effect.logInfo("attached-sessions.disowned", { threadId: session.threadId });
+    });
+
     const isOwnedByT3 = Effect.fn("AttachedSessions.isOwnedByT3")(function* (sessionId: string) {
       if (ownedByT3.has(sessionId)) return true;
-      const owner = yield* projectionStore.getProviderThreadOwner(
-        IdAllocator.deriveProviderThread({ driver: CLAUDE_DRIVER, nativeThreadId: sessionId }),
-      );
+      const owner = yield* projectionStore.getNativeThreadOwner({
+        driver: CLAUDE_DRIVER,
+        nativeThreadId: sessionId,
+        derivedProviderThreadId: IdAllocator.deriveProviderThread({
+          driver: CLAUDE_DRIVER,
+          nativeThreadId: sessionId,
+        }),
+      });
       if (owner !== null) ownedByT3.add(sessionId);
       return owner !== null;
     });
@@ -705,10 +736,22 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
 
       const live = new Map<string, ClaudeAgentsRosterEntry>();
       for (const entry of snapshot.value.sessions) {
-        // claude-mem's observer sessions are not agents the user drives, and a
-        // session T3 runs or took over already has its own thread.
+        // claude-mem's observer sessions are not agents the user drives.
         if (isClaudeMemObserverSession(entry.cwd)) continue;
-        if (!all.has(entry.sessionId) && (yield* isOwnedByT3(entry.sessionId))) continue;
+        // A session T3 runs or took over already has its own thread. Process
+        // ancestry is checked on every sweep: while a run starts T3 does not
+        // know its native session id yet. The database lookup, a scan, runs
+        // once per session the mirror has not taken.
+        if (
+          entry.spawnedByServer ||
+          ownedByT3.has(entry.sessionId) ||
+          (!all.has(entry.sessionId) && (yield* isOwnedByT3(entry.sessionId)))
+        ) {
+          ownedByT3.add(entry.sessionId);
+          const tracked = all.get(entry.sessionId);
+          if (tracked !== undefined) yield* isolated(tracked, disown(tracked, all));
+          continue;
+        }
         live.set(entry.sessionId, entry);
       }
       for (const session of running()) {
