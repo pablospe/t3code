@@ -359,8 +359,19 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
  * seeded with before the first run, and the drop-prompt preset chosen for it.
  * Optional so payloads from servers without them still decode.
  */
+/** Task text streams in every shell row, so it stays bounded. */
+export const THREAD_TASK_DETAILS_MAX_LENGTH = 10_000;
+
 const OrchestrationV2ThreadTaskFields = {
-  taskDetails: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  taskDetails: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(
+        Schema.isMaxLength(THREAD_TASK_DETAILS_MAX_LENGTH, {
+          message: `Task details must be at most ${THREAD_TASK_DETAILS_MAX_LENGTH.toLocaleString("en-US")} characters.`,
+        }),
+      ),
+    ),
+  ),
   workflowPreset: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 };
 

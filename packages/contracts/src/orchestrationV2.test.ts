@@ -37,6 +37,7 @@ import {
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadStreamItem,
   OrchestrationV2ThreadShell,
+  THREAD_TASK_DETAILS_MAX_LENGTH,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
 } from "./orchestrationV2.ts";
@@ -444,6 +445,22 @@ describe("orchestration V2 contracts", () => {
       workflowPreset: undefined,
     });
     expect(() => decodeTask({ taskDetails: "   " })).toThrow();
+  });
+
+  it("caps board task details at 10,000 characters with a readable error", () => {
+    const decodeDetails = (taskDetails: string) =>
+      decodeOrchestrationV2Command({
+        type: "thread.metadata.update",
+        commandId: "command-task",
+        threadId: "thread-1",
+        taskDetails,
+      });
+    expect(() => decodeDetails("x".repeat(THREAD_TASK_DETAILS_MAX_LENGTH))).not.toThrow();
+    // Trimming runs first, so padding never pushes valid text over the cap.
+    expect(() => decodeDetails(` ${"x".repeat(THREAD_TASK_DETAILS_MAX_LENGTH)} `)).not.toThrow();
+    expect(() => decodeDetails("x".repeat(THREAD_TASK_DETAILS_MAX_LENGTH + 1))).toThrow(
+      "Task details must be at most 10,000 characters.",
+    );
   });
 
   it("decodes app-owned delegated task commands", () => {

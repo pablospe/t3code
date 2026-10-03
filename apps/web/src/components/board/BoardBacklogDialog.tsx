@@ -1,6 +1,8 @@
+import { THREAD_TASK_DETAILS_MAX_LENGTH } from "@t3tools/contracts";
 import { useState } from "react";
 
 import { BOARD_PROMPT_PRESETS } from "~/boardPromptsStore";
+import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import {
@@ -104,7 +106,10 @@ function BoardTaskForm({
   const [details, setDetails] = useState(initial?.details ?? "");
   const [presetId, setPresetId] = useState<string | null>(initial?.presetId ?? null);
   const trimmed = title.trim();
-  const canSubmit = trimmed.length > 0 && (editing || modelAvailable);
+  // The server rejects longer details, so Save waits until they fit.
+  const detailsLength = details.trim().length;
+  const detailsTooLong = taskFieldsSupported && detailsLength > THREAD_TASK_DETAILS_MAX_LENGTH;
+  const canSubmit = trimmed.length > 0 && (editing || modelAvailable) && !detailsTooLong;
   const submit = () => {
     if (!canSubmit) return;
     onSubmit({ title: trimmed, details: details.trim(), presetId });
@@ -144,7 +149,21 @@ function BoardTaskForm({
                 rows={4}
                 placeholder="Full task description delivered when planning starts (optional)"
                 aria-label="Task details"
+                aria-invalid={detailsTooLong || undefined}
               />
+              {/* Quiet until the limit is close, then a live count. */}
+              {detailsLength > THREAD_TASK_DETAILS_MAX_LENGTH * 0.9 ? (
+                <p
+                  className={cn(
+                    "-mt-2 text-right text-3xs tabular-nums",
+                    detailsTooLong ? "text-destructive" : "text-muted-foreground/70",
+                  )}
+                >
+                  {detailsTooLong
+                    ? `Too long to save: ${detailsLength.toLocaleString("en-US")} / ${THREAD_TASK_DETAILS_MAX_LENGTH.toLocaleString("en-US")} characters`
+                    : `${detailsLength.toLocaleString("en-US")} / ${THREAD_TASK_DETAILS_MAX_LENGTH.toLocaleString("en-US")} characters`}
+                </p>
+              ) : null}
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Workflow:</span>
