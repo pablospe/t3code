@@ -3,6 +3,7 @@ import {
   Minimize2Icon,
   PanelBottomIcon,
   PanelRightIcon,
+  PanelTopIcon,
   SquareMenuIcon,
 } from "lucide-react";
 import { memo, type ReactElement } from "react";
@@ -28,6 +29,11 @@ export interface PanelLayoutControlsProps {
   rightPanelOpen: boolean;
   rightPanelShortcutLabel: string | null;
   rightPanelUnavailableLabel?: string;
+  /** The board drawer toggle rides with the thread panel control, and renders
+      only where a handler is provided. */
+  boardDrawerOpen?: boolean;
+  boardShortcutLabel?: string | null;
+  onToggleBoardDrawer?: () => void;
   onToggleTerminal: () => void;
   onToggleThreadPanel: () => void;
   onToggleRightPanel: () => void;
@@ -49,6 +55,9 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelOpen,
   rightPanelShortcutLabel,
   rightPanelUnavailableLabel = "Right panel is unavailable",
+  boardDrawerOpen = false,
+  boardShortcutLabel = null,
+  onToggleBoardDrawer,
   onToggleTerminal,
   onToggleThreadPanel,
   onToggleRightPanel,
@@ -88,6 +97,27 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {showThreadPanelControl && onToggleBoardDrawer ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0 [-webkit-app-region:no-drag]"
+                pressed={boardDrawerOpen}
+                onPressedChange={onToggleBoardDrawer}
+                aria-label="Toggle board drawer"
+                variant="ghost"
+                size="sm"
+              >
+                <PanelTopIcon className="size-4" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">
+            {`Toggle board drawer${boardShortcutLabel ? ` (${boardShortcutLabel})` : ""}`}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
       {showThreadPanelControl
         ? threadPanelPresentation === "popover"
           ? threadPanelTooltip(

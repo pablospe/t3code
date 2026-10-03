@@ -423,6 +423,8 @@ import {
   resolveScrollToEndClearance,
 } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
+import { BoardDrawer } from "./board/BoardDrawer";
+import { useBoardDrawerStore } from "../boardDrawerStore";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
@@ -1932,6 +1934,8 @@ export default function ChatView(props: ChatViewProps) {
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
+  const boardDrawerOpen = useBoardDrawerStore((state) => state.open);
+  const toggleBoardDrawer = useBoardDrawerStore((state) => state.toggle);
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
   );
@@ -7456,6 +7460,13 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "board.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleBoardDrawer();
+        return;
+      }
+
       if (command === "rightPanel.close") {
         // Nothing open: leave the event alone so the shortcut keeps its
         // native meaning (close window on desktop, close tab in a browser).
@@ -7634,6 +7645,7 @@ export default function ChatView(props: ChatViewProps) {
     toggleRightPanel,
     toggleThreadPanel,
     toggleTerminalVisibility,
+    toggleBoardDrawer,
     composerRef,
   ]);
 
@@ -10488,6 +10500,9 @@ export default function ChatView(props: ChatViewProps) {
     onToggleTerminal: toggleTerminalVisibility,
     onToggleThreadPanel: toggleThreadPanel,
     onToggleRightPanel: toggleRightPanel,
+    boardDrawerOpen,
+    boardShortcutLabel: shortcutLabelForCommand(keybindings, "board.toggle"),
+    onToggleBoardDrawer: toggleBoardDrawer,
   } satisfies PanelLayoutControlsProps;
   const panelToggleControls = (
     <PanelLayoutControls
@@ -10622,6 +10637,7 @@ export default function ChatView(props: ChatViewProps) {
           />
         </header>
 
+        <BoardDrawer />
         {/* Main content area with optional plan sidebar */}
         <div className="relative flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}

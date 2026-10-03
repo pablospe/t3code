@@ -53,6 +53,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  KanbanIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -2001,6 +2002,17 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:board",
+    searchTerms: ["board", "kanban", "columns", "backlog", "review"],
+    title: "Open board",
+    icon: <KanbanIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/board" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

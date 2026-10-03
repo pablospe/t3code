@@ -232,7 +232,9 @@ export const ChatHeader = memo(function ChatHeader({
     <div
       className={cn(
         "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
-        rightPanelOpen ? "pr-10" : "pr-24",
+        // Room for the fixed toggle cluster: board + thread details while the
+        // right panel owns the title bar, plus terminal and right panel otherwise.
+        rightPanelOpen ? "pr-18" : "pr-32",
       )}
       onContextMenu={handleHeaderContextMenu}
     >
