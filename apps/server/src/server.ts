@@ -151,11 +151,15 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import {
+  ClaudeAgentsRosterLayerLive,
   OrchestrationEventInfrastructureLayerLive,
+  OrchestrationV2EventSinkLayerLive,
   OrchestrationV2ProductionLayerLive,
   ProjectServiceLayerLive,
   ProjectSetupScriptRunnerLayerLive,
 } from "./orchestration-v2/runtimeLayer.ts";
+import * as AttachedSessions from "./attachedSessions/AttachedSessions.ts";
+import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
@@ -531,6 +535,24 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     Layer.provide(PullRequestWatchReactor.layer),
     Layer.provide(PullRequestServiceLive),
     Layer.provide(ProjectionStoreV2.layer),
+  ),
+  // Mirrors Claude CLI sessions running in a terminal while
+  // `enableAttachedSessions` is on.
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* AttachedSessions.AttachedSessions;
+      yield* service.start();
+    }),
+  ).pipe(
+    Layer.provide(AttachedSessions.layer),
+    Layer.provide(
+      Layer.mergeAll(
+        OrchestrationV2EventSinkLayerLive,
+        ProjectionStoreV2.layer,
+        IdAllocator.layer,
+        ClaudeAgentsRosterLayerLive,
+      ),
+    ),
   ),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.

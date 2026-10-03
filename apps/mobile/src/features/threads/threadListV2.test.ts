@@ -140,6 +140,28 @@ describe("resolveThreadListV2Status", () => {
     ).toBe("ready");
   });
 
+  it("shows a mirrored terminal session waiting for its user as its own status", () => {
+    const thread = makeThread({
+      id: ThreadId.make("terminal"),
+      title: "terminal",
+      runtime: {
+        status: "waiting",
+        activeRunId: null,
+        providerName: null,
+        providerInstanceId: ProviderInstanceId.make("claudeAttached"),
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    expect(
+      resolveThreadListV2Status({
+        ...thread,
+        externalSessionWaiting: { reason: "permission prompt" },
+      }),
+    ).toBe("terminal");
+    expect(resolveThreadListV2Status({ ...thread, externalSessionWaiting: null })).toBe("working");
+  });
+
   it("prioritizes approval over a running runtime", () => {
     const thread = makeThread({
       id: ThreadId.make("t"),

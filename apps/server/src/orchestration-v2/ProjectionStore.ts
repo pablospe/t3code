@@ -315,6 +315,10 @@ export interface ProjectionStoreV2Shape {
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
   ) => Effect.Effect<number, ProjectionStoreV2Error>;
+  /** The app thread a provider thread belongs to, if any thread has it. */
+  readonly getProviderThreadOwner: (
+    providerThreadId: ProviderThreadId,
+  ) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
   readonly getThreadRecords: <K extends ProjectionRecordField>(
     threadId: ThreadId,
     fields: ReadonlyArray<K>,
@@ -1369,6 +1373,9 @@ export function threadShellFromProjection(
     ...(projection.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: projection.thread.historyOrigin }),
+    ...(projection.thread.externalSession == null
+      ? {}
+      : { externalSession: projection.thread.externalSession }),
     latestRunId: latestRun?.id ?? null,
     latestRunRequestedAt: latestRun?.requestedAt ?? null,
     latestRunStartedAt: latestRun?.startedAt ?? null,
@@ -1608,6 +1615,9 @@ function shellFromState(input: {
     ...(input.state.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: input.state.thread.historyOrigin }),
+    ...(input.state.thread.externalSession == null
+      ? {}
+      : { externalSession: input.state.thread.externalSession }),
     latestRunId: input.state.latestRunId,
     latestRunRequestedAt: input.state.latestRunRequestedAt,
     latestRunStartedAt: input.state.latestRunStartedAt,
@@ -4476,6 +4486,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError(controlReadError(threadId)),
       );
 
+    const getProviderThreadOwner: ProjectionStoreV2Shape["getProviderThreadOwner"] = (
+      providerThreadId,
+    ) =>
+      sql<{ thread_id: string }>`SELECT thread_id
+        FROM orchestration_v2_projection_provider_threads
+        WHERE provider_thread_id = ${providerThreadId}`.pipe(
+        Effect.map((rows) => (rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id))),
+        Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+      );
+
     const getThreadAttachmentIds: ProjectionStoreV2Shape["getThreadAttachmentIds"] = (threadId) =>
       sql<{ id: string }>`
       SELECT DISTINCT json_extract(attachment.value, '$.id') AS id
@@ -5483,6 +5503,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       hasUnpairedRunInterruptRequest,
       getMessageCount,
       getNextTurnItemOrdinal,
+      getProviderThreadOwner,
       getThreadRecords,
       getRuntimeRequest,
       getPlan,
@@ -5727,6 +5748,15 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               (state.projections
                 .get(threadId)
                 ?.turnItems.reduce((max, item) => Math.max(max, item.ordinal), 0) ?? 0) + 1,
+          ),
+        ),
+      getProviderThreadOwner: (providerThreadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map(
+            (state) =>
+              [...state.projections.values()].find((projection) =>
+                projection.providerThreads.some((thread) => thread.id === providerThreadId),
+              )?.thread.id ?? null,
           ),
         ),
       getThreadAttachmentIds: (threadId) =>

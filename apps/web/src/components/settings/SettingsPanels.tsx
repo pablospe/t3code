@@ -620,6 +620,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
         ? ["Provider update checks"]
         : []),
+      ...(settings.enableAttachedSessions !== DEFAULT_UNIFIED_SETTINGS.enableAttachedSessions
+        ? ["Terminal Claude sessions"]
+        : []),
       ...(settings.continueThreadsAfterServerUpdate !==
       DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
         ? ["Continue threads after restarts"]
@@ -696,6 +699,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.responseStreamingMode,
       settings.persistComposerContextStrip,
       settings.enableProviderUpdateChecks,
+      settings.enableAttachedSessions,
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
@@ -810,6 +814,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      enableAttachedSessions: DEFAULT_UNIFIED_SETTINGS.enableAttachedSessions,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
@@ -2892,6 +2897,35 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
               }
               aria-label="Check provider versions"
+            />
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          settingKeys={["enableAttachedSessions"]}
+          {...searchableSetting("attached-sessions")}
+          description="Show the Claude Code sessions you run in a terminal on this environment as threads you can follow and message."
+          resetAction={
+            settings.enableAttachedSessions !== DEFAULT_UNIFIED_SETTINGS.enableAttachedSessions ? (
+              <SettingResetButton
+                label="terminal Claude sessions"
+                onClick={() =>
+                  updateSettings({
+                    enableAttachedSessions: DEFAULT_UNIFIED_SETTINGS.enableAttachedSessions,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["enableAttachedSessions"]}
+              checked={settings.enableAttachedSessions}
+              onCheckedChange={(checked) =>
+                updateSettings({ enableAttachedSessions: Boolean(checked) })
+              }
+              aria-label="Show terminal Claude sessions"
             />
           }
         />

@@ -13,6 +13,7 @@ import {
 import {
   type ChatAttachment,
   CommandId,
+  isExternalSessionThread,
   isProviderNativeSubagentThread,
   MessageId,
   type ModelSelection,
@@ -183,6 +184,15 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedError<
   }
 }
 
+export class OrchestratorExternalSessionThreadReadOnlyError extends Schema.TaggedError<OrchestratorExternalSessionThreadReadOnlyError>()(
+  "OrchestratorExternalSessionThreadReadOnlyError",
+  { commandId: CommandId, commandType: Schema.String, threadId: ThreadId },
+) {
+  override get message(): string {
+    return "This thread mirrors a session running outside T3 Code. Control it where it runs; from here you can only send it messages.";
+  }
+}
+
 export class OrchestratorCommandPreviouslyRejectedError extends Schema.TaggedError<OrchestratorCommandPreviouslyRejectedError>()(
   "OrchestratorCommandPreviouslyRejectedError",
   {
@@ -232,6 +242,7 @@ export const OrchestratorV2Error = Schema.Union([
   OrchestratorCommandPreviouslyRejectedError,
   OrchestratorCommandIdConflictError,
   OrchestratorSubagentThreadReadOnlyError,
+  OrchestratorExternalSessionThreadReadOnlyError,
 ]);
 export type OrchestratorV2Error = typeof OrchestratorV2Error.Type;
 
@@ -398,6 +409,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "provider.switch":
+    case "thread.external-session.message.send":
+    case "thread.external-session.update":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -2335,6 +2348,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       return yield* new OrchestratorSubagentThreadReadOnlyError({
         commandId: command.commandId,
+        threadId: command.threadId,
+      });
+    }
+    if (
+      isExternalSessionThread(thread) &&
+      ((command.type === "thread.pull-request.watch" && command.watching) ||
+        command.type === "thread.runtime-mode.set" ||
+        command.type === "thread.interaction-mode.set" ||
+        command.type === "thread.model-selection.set" ||
+        command.type === "provider.switch")
+    ) {
+      return yield* new OrchestratorExternalSessionThreadReadOnlyError({
+        commandId: command.commandId,
+        commandType: command.type,
         threadId: command.threadId,
       });
     }
@@ -9161,6 +9188,154 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  /**
+   * The thread a run-control command would act on when that thread mirrors an
+   * external session. Message dispatch and per-thread settings are checked
+   * where those commands already load their thread.
+   */
+  const externalSessionControlTarget = (command: OrchestrationV2ServerCommand) => {
+    switch (command.type) {
+      case "run.interrupt":
+      case "runtime-request.respond":
+      case "thread.user-input.dismiss":
+      case "checkpoint.rollback":
+        return command.threadId;
+      // A fork would start a T3-owned copy of a conversation T3 cannot resume,
+      // and a merge would write T3 history into a session it does not own.
+      case "thread.fork":
+        return command.sourceThreadId;
+      case "thread.merge_back":
+        return command.targetThreadId;
+      default:
+        return null;
+    }
+  };
+
+  /**
+   * An external-session thread's conversation runs, and is controlled, outside
+   * T3. Stopping, answering, rewinding or forking it has nowhere to go, so
+   * those commands fail with that reason instead of a provider lookup failure.
+   */
+  const rejectExternalSessionControl = Effect.fn(
+    "orchestrationV2.dispatch.rejectExternalSessionControl",
+  )(function* (command: OrchestrationV2ServerCommand) {
+    const threadId = externalSessionControlTarget(command);
+    if (threadId === null) return;
+    const thread = yield* projectionStore
+      .getThread(threadId)
+      .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+    if (isExternalSessionThread(thread)) {
+      return yield* new OrchestratorExternalSessionThreadReadOnlyError({
+        commandId: command.commandId,
+        commandType: command.type,
+        threadId,
+      });
+    }
+  });
+
+  /**
+   * Accepts a message for the session an external-session thread mirrors. The
+   * delivery itself is an effect, so it runs after the command commits; the
+   * thread event only carries the command's receipt and effect.
+   */
+  const dispatchExternalSessionMessageSend = Effect.fn(
+    "orchestrationV2.dispatch.externalSessionMessageSend",
+  )(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "thread.external-session.message.send" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const thread = yield* projectionStore
+      .getThread(command.threadId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    if (!isExternalSessionThread(thread)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Only a thread that mirrors an external session takes this message.",
+      });
+    }
+    if (thread.deletedAt !== null || thread.archivedAt !== null) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is not active.`,
+      });
+    }
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: command.threadId,
+      occurredAt: yield* DateTime.now,
+      payload: thread,
+    });
+    yield* Ref.update(effects, (existing) => [
+      ...existing,
+      {
+        id: `effect:external-session-message:${command.commandId}`,
+        commandId: command.commandId,
+        threadId: command.threadId,
+        request: { type: "external-session.message.send" as const, text: command.text },
+      },
+    ]);
+  });
+
+  /**
+   * Stamps the external-session marker and the session's latest activity. A
+   * thread that already mirrors a different session is never re-pointed.
+   */
+  const dispatchExternalSessionUpdate = Effect.fn("orchestrationV2.dispatch.externalSessionUpdate")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.external-session.update" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const current = thread.externalSession ?? null;
+      if (
+        thread.deletedAt !== null ||
+        (current !== null && current.nativeSessionId !== command.externalSession.nativeSessionId)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} does not mirror this session.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          externalSession: command.externalSession,
+          autoSettleDisabledAt: thread.autoSettleDisabledAt ?? now,
+        },
+      });
+    },
+  );
+
   const dispatchUnsupported = (command: OrchestrationV2ServerCommand) =>
     Effect.fail(
       new OrchestratorDispatchError({
@@ -9196,6 +9371,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           readonly reason: string;
         }
       | undefined;
+    yield* rejectExternalSessionControl(command);
     switch (command.type) {
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
@@ -9312,9 +9488,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             threadId: command.threadId,
           });
         }
+        if (isExternalSessionThread(thread)) {
+          return yield* new OrchestratorExternalSessionThreadReadOnlyError({
+            commandId: command.commandId,
+            commandType: command.type,
+            threadId: command.threadId,
+          });
+        }
         yield* dispatchMessage(command, events, effects);
         break;
       }
+      case "thread.external-session.message.send":
+        yield* dispatchExternalSessionMessageSend(command, events, effects);
+        break;
+      case "thread.external-session.update":
+        yield* dispatchExternalSessionUpdate(command, events);
+        break;
       case "notification.delivery.accept":
         yield* dispatchNotificationAccepted(command, events);
         break;

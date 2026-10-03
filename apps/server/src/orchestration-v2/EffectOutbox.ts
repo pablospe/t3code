@@ -95,6 +95,11 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     type: Schema.Literal("attachment.cleanup"),
     attachmentIds: Schema.Array(Schema.String),
   }),
+  /** Hands a message to the session an external-session thread mirrors. */
+  Schema.Struct({
+    type: Schema.Literal("external-session.message.send"),
+    text: Schema.String,
+  }),
   Schema.Struct({
     type: Schema.Literal("thread-title.generate"),
     kind: Schema.Union([
@@ -121,6 +126,9 @@ export const PROCESS_BOUND_EFFECT_TYPES = [
   "provider-turn.steer",
   "provider-turn.restart",
   "runtime-request.respond",
+  // A send that outlived its process is stale, and repeating one that already
+  // reached the session would deliver the message twice.
+  "external-session.message.send",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const OrchestrationEffectStatusV2 = Schema.Literals([

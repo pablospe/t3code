@@ -76,6 +76,48 @@ describe("V2 client presentation", () => {
     expect(shell.source).toBe(v2ThreadShell);
   });
 
+  it("shows a mirrored terminal session working, and waiting on its user, without runs", () => {
+    const externalSession = (
+      status: "running" | "waiting" | "idle" | "ended",
+    ): (typeof v2ThreadShell)["externalSession"] => ({
+      driver: ProviderDriverKind.make("claudeAgent"),
+      nativeSessionId: "terminal-session",
+      activity: {
+        status,
+        waitingReason: status === "waiting" ? "permission prompt" : null,
+        workStartedAt: status === "idle" ? null : "2026-06-20T01:00:00.000Z",
+      },
+    });
+    const working = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      externalSession: externalSession("running"),
+    });
+    expect(working.runtime).toMatchObject({
+      status: "running",
+      activityStartedAt: "2026-06-20T01:00:00.000Z",
+    });
+    expect(working.hasPendingApprovals).toBe(false);
+    expect(working.externalSessionWaiting).toBeNull();
+
+    const waiting = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      externalSession: externalSession("waiting"),
+    });
+    expect(waiting.runtime?.status).toBe("waiting");
+    // Its own status, so no approval styling or counts leak in.
+    expect(waiting.hasPendingApprovals).toBe(false);
+    expect(waiting.externalSessionWaiting).toEqual({ reason: "permission prompt" });
+
+    for (const status of ["idle", "ended"] as const) {
+      const shell = presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        externalSession: externalSession(status),
+      });
+      expect(shell.runtime?.status).toBe("idle");
+      expect(shell.externalSessionWaiting).toBeNull();
+    }
+  });
+
   it("preserves active ordering and both pull-request sources", () => {
     const linkedPullRequest = {
       projectId: v2ThreadShell.projectId,

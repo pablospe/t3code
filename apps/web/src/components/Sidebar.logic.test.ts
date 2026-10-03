@@ -1232,6 +1232,28 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Pending Approval", pulse: false });
   });
 
+  it("shows a waiting terminal session as its own status, with the reason on hover", () => {
+    const waiting = {
+      ...baseThread,
+      runtime: { ...baseThread.runtime, status: "waiting" as const },
+    };
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...waiting, externalSessionWaiting: { reason: "permission prompt" } },
+      }),
+    ).toMatchObject({
+      label: "Waiting in terminal",
+      tooltip: "Waiting in terminal: permission prompt",
+      pulse: false,
+    });
+    expect(
+      resolveThreadStatusPill({ thread: { ...waiting, externalSessionWaiting: { reason: null } } }),
+    ).not.toHaveProperty("tooltip");
+    expect(
+      resolveThreadStatusPill({ thread: { ...waiting, externalSessionWaiting: null } }),
+    ).toMatchObject({ label: "Working" });
+  });
+
   it("shows awaiting input when plan mode is blocked on user answers", () => {
     expect(
       resolveThreadStatusPill({

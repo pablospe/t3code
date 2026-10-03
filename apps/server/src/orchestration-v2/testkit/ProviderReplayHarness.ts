@@ -50,6 +50,7 @@ import * as ThreadTitleRegenerationService from "../ThreadTitleRegenerationServi
 import * as RuntimePolicy from "../RuntimePolicy.ts";
 import * as TurnItemPositionStore from "../TurnItemPositionStore.ts";
 import * as RuntimeRequestService from "../RuntimeRequestService.ts";
+import * as AttachedSessionSender from "../../attachedSessions/AttachedSessionSender.ts";
 import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
 import * as ThreadForkService from "../ThreadForkService.ts";
 import {
@@ -262,6 +263,8 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    /** Stands in for the Agent SDK relay behind external-session message sends. */
+    readonly attachedSessionDeliver?: AttachedSessionSender.AttachedSessionDeliver;
   } = {},
 ): Layer.Layer<
   Orchestrator.OrchestratorV2 | EffectWorker.OrchestrationEffectWorkerV2 | EventSink.EventSinkV2,
@@ -456,6 +459,10 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         threadTitleRegenerationTestLayer,
         serverSettingsLayer,
         threadManagementProvided,
+        AttachedSessionSender.layerWithDeliver(
+          options.attachedSessionDeliver ??
+            (() => Effect.die("This replay does not expect an external-session send.")),
+        ).pipe(Layer.provide(Layer.mergeAll(storesLayer, eventSinkProvided, IdAllocator.layer))),
       ),
     ),
   );

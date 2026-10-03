@@ -3,6 +3,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  attachedClaudeThreadId,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -143,5 +144,74 @@ it.effect("imports messages once and preserves the provider native resume bindin
       }),
     ]);
     expect(recorded).toHaveLength(2);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("leaves a Claude session the attached-session mirror already shows to the mirror", () => {
+  const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
+  const sessionId = "0b5c3a52-7d1e-4f4c-9a3b-2f0d6c1e8a90";
+  const writes: Array<ReadonlyArray<OrchestrationV2DomainEvent>> = [];
+  const scanner = AgentSessionScanner.AgentSessionScanner.of({
+    scan: Effect.die("unused"),
+    recentThreads: () =>
+      Stream.succeed({
+        _tag: "Importable",
+        source: {
+          provider: "claudeAgent",
+          providerInstanceId: claudeInstanceId,
+          providerSessionId: sessionId,
+          filePath: `/tmp/${sessionId}.jsonl`,
+          size: 100,
+          mtimeMs: 2,
+          device: 3,
+          inode: 4,
+          birthtimeMs: 1,
+        },
+        thread: {
+          source: "claudeAgent",
+          providerInstanceId: claudeInstanceId,
+          providerSessionId: sessionId,
+          title: "Terminal session",
+          model: null,
+          createdAt: "2026-09-01T10:00:00.000Z",
+          updatedAt: "2026-09-01T10:01:00.000Z",
+          messages: [{ role: "user", text: "Fix it", createdAt: "2026-09-01T10:00:00.000Z" }],
+        },
+      }),
+  });
+  const testLayer = AgentSessionImporter.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(
+              Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
+            ),
+        }),
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadRecords: (id) =>
+            id === attachedClaudeThreadId(sessionId)
+              ? Effect.succeed({ thread: { id, projectId, deletedAt: null } } as never)
+              : Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: id })),
+        }),
+        Layer.mock(EventSink.EventSinkV2)({
+          write: (input) => Effect.sync(() => void writes.push(input.events)).pipe(Effect.as([])),
+        }),
+        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+          list: () => Effect.succeed([]),
+        }),
+        IdAllocator.layer,
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
+      importedCount: 0,
+      skippedCount: 1,
+    });
+    expect(writes).toEqual([]);
   }).pipe(Effect.provide(testLayer));
 });

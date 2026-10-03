@@ -375,6 +375,34 @@ const OrchestrationV2ThreadTaskFields = {
   workflowPreset: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 };
 
+/**
+ * A session that runs outside T3 Code, such as a `claude` CLI session in a
+ * terminal, mirrored into this thread. The outside process stays its owner: T3
+ * never starts, resumes, forks or steers it, and a message reaches it only
+ * through `thread.external-session.message.send`.
+ */
+export const OrchestrationV2ExternalSession = Schema.Struct({
+  driver: ProviderDriverKind,
+  nativeSessionId: TrimmedNonEmptyString,
+  /**
+   * What the session is doing, as its owner reports it. These threads have no
+   * runs, so clients show working and waiting from here. Absent until the
+   * server has seen the session.
+   */
+  activity: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        status: Schema.Literals(["running", "waiting", "idle", "ended"]),
+        /** What a waiting session waits for, in its own words ("permission prompt"). */
+        waitingReason: Schema.NullOr(TrimmedNonEmptyString),
+        /** When the current stretch of work began; kept while running and waiting alternate. */
+        workStartedAt: Schema.NullOr(IsoDateTime),
+      }),
+    ),
+  ),
+});
+export type OrchestrationV2ExternalSession = typeof OrchestrationV2ExternalSession.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -395,6 +423,9 @@ export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2ThreadTaskFields,
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  /** Set when the thread mirrors a session T3 does not own. Optional so older
+      payloads still decode, and older clients ignore it. */
+  externalSession: Schema.optional(Schema.NullOr(OrchestrationV2ExternalSession)),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -463,6 +494,13 @@ export function isProviderNativeSubagentThread(
   thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
 ): boolean {
   return thread.lineage.relationshipToParent === "subagent" && thread.creationSource === "provider";
+}
+
+/** A thread mirroring a session T3 does not own (see OrchestrationV2ExternalSession). */
+export function isExternalSessionThread(
+  thread: Pick<OrchestrationV2AppThread, "externalSession">,
+): boolean {
+  return thread.externalSession !== undefined && thread.externalSession !== null;
 }
 
 export const OrchestrationV2RunStatus = Schema.Literals([
@@ -1725,6 +1763,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  externalSession: Schema.optional(Schema.NullOr(OrchestrationV2ExternalSession)),
   latestRunId: Schema.NullOr(RunId),
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2888,6 +2927,19 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     modelSelection: ModelSelection,
   }),
+  /**
+   * Hands a message to the session an external-session thread mirrors. It is
+   * not a run: delivery happens after the command commits, the mirror shows the
+   * message once the session records it, and a failed delivery leaves a notice
+   * on the thread.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.external-session.message.send"),
+    ...OrchestrationV2CreationFields,
+    commandId: CommandId,
+    threadId: ThreadId,
+    text: TrimmedNonEmptyString,
+  }),
 ]);
 export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
@@ -2897,6 +2949,18 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  /**
+   * Records an external-session thread's marker and the session's activity.
+   * The mirror sends it so these writes serialize with the user's own commands
+   * on the thread. It also turns automatic settlement off: the session's
+   * lifetime, not inactivity, decides when the thread leaves the active list.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.external-session.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    externalSession: OrchestrationV2ExternalSession,
+  }),
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is

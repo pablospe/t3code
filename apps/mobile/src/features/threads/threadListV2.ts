@@ -68,6 +68,7 @@ export function resolveThreadListV2ProviderDrivers(
 export type ThreadListV2Status =
   | "approval"
   | "input"
+  | "terminal"
   | "working"
   | "waiting"
   | "failed"
@@ -172,13 +173,18 @@ export function threadHasUnseenCompletion(
 }
 
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime">,
+  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime"> &
+    Partial<Pick<EnvironmentThreadShell, "externalSessionWaiting">>,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
   if (thread.hasPendingUserInput) {
     return "input";
+  }
+  // A mirrored terminal session needs its user in the terminal, not here.
+  if (thread.externalSessionWaiting) {
+    return "terminal";
   }
   if (
     thread.runtime !== null &&

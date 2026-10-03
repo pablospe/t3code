@@ -108,13 +108,20 @@ export function deriveThreadActivityRun(
 
 /**
  * Provider-native subagent threads never get app runs: their work is a runless
- * root turn whose status follows the subagent. Returns when that work started
- * while it is still active, so clients can show the same working state (and
- * timer) as a run. Stop, queue, and steer stay run-only.
+ * root turn whose status follows the subagent. External-session threads have
+ * none either; their session's reported activity plays the same part. Returns
+ * when that work started while it is still active, so clients can show the
+ * same working state (and timer) as a run. Stop, queue, and steer stay run-only.
  */
 export function deriveRunlessWorkStartedAt(
   projection: OrchestrationV2ThreadProjection,
 ): string | null {
+  const activity = projection.thread.externalSession?.activity;
+  if (activity != null) {
+    return activity.status === "running" || activity.status === "waiting"
+      ? activity.workStartedAt
+      : null;
+  }
   const status = deriveProviderSubagentStatus(projection);
   return status !== null && isOrchestrationV2WorkActive(status.status) ? status.startedAt : null;
 }
@@ -218,6 +225,39 @@ export function formatProviderSubagentStatus(
   // Whole seconds: a ticking label must not flicker through tenths.
   const elapsed = formatDuration(Math.max(1_000, Math.floor((end - start) / 1_000) * 1_000));
   return live ? `${label} ${elapsed}` : `${label} in ${elapsed}`;
+}
+
+type ExternalSessionActivity = NonNullable<
+  NonNullable<OrchestrationV2ThreadProjection["thread"]["externalSession"]>["activity"]
+>;
+
+/**
+ * The status line of an external-session thread, e.g. "Working 2m 5s" or
+ * "Waiting for you in the terminal: permission prompt".
+ */
+export function formatExternalSessionActivity(
+  activity: ExternalSessionActivity | null,
+  nowMs: number,
+): string {
+  switch (activity?.status) {
+    case undefined:
+      return "Terminal session";
+    case "waiting":
+      return activity.waitingReason === null
+        ? "Waiting for you in the terminal"
+        : `Waiting for you in the terminal: ${activity.waitingReason}`;
+    case "idle":
+      return "Idle in the terminal";
+    case "ended":
+      return "Session ended";
+    case "running": {
+      const start =
+        activity.workStartedAt === null ? Number.NaN : Date.parse(activity.workStartedAt);
+      if (!Number.isFinite(start)) return "Working";
+      // Whole seconds: a ticking label must not flicker through tenths.
+      return `Working ${formatDuration(Math.max(1_000, Math.floor((nowMs - start) / 1_000) * 1_000))}`;
+    }
+  }
 }
 
 export function deriveThreadRuntime(

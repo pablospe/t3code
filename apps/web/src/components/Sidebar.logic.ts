@@ -596,16 +596,20 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
+    | "Waiting in terminal"
     | "Waiting"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
+  /** Shown on hover instead of the label when the label alone does not say enough. */
+  tooltip?: string;
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   "Awaiting Input": 4,
+  "Waiting in terminal": 4,
   Working: 3,
   Connecting: 3,
   Waiting: 2.5,
@@ -624,6 +628,7 @@ type ThreadStatusInput = Pick<
 > & {
   lastVisitedAt?: string | null | undefined;
   pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
+  externalSessionWaiting?: SidebarThreadSummary["externalSessionWaiting"] | undefined;
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -1186,6 +1191,19 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
       pulse: false,
+    };
+  }
+
+  // A mirrored terminal session needs its user in the terminal, not here.
+  if (thread.externalSessionWaiting) {
+    return {
+      label: "Waiting in terminal",
+      colorClass: "text-indigo-600 dark:text-indigo-300/90",
+      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      pulse: false,
+      ...(thread.externalSessionWaiting.reason === null
+        ? {}
+        : { tooltip: `Waiting in terminal: ${thread.externalSessionWaiting.reason}` }),
     };
   }
 

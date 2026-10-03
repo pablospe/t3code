@@ -430,6 +430,20 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     />
                     <View className="border-t border-border-subtle">
                       <SettingsSwitchRow
+                        icon="terminal"
+                        label="Terminal Claude sessions"
+                        subtitle={
+                          projectSelected
+                            ? "Environment-wide setting. Select All projects to change it."
+                            : "Show Claude Code sessions run in a terminal as threads."
+                        }
+                        value={uniform("enableAttachedSessions")}
+                        disabled={disabledFor("enableAttachedSessions")}
+                        onValueChange={(value) => write({ enableAttachedSessions: value })}
+                      />
+                    </View>
+                    <View className="border-t border-border-subtle">
+                      <SettingsSwitchRow
                         icon="arrow.uturn.forward"
                         label="Continue after restart"
                         subtitle={
