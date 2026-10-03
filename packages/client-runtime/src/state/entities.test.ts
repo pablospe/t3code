@@ -97,13 +97,16 @@ describe("V2 client presentation", () => {
       activityStartedAt: "2026-06-20T01:00:00.000Z",
     });
     expect(working.hasPendingApprovals).toBe(false);
+    expect(working.externalSessionWaiting).toBeNull();
 
     const waiting = presentThreadShell(environmentId, {
       ...v2ThreadShell,
       externalSession: externalSession("waiting"),
     });
     expect(waiting.runtime?.status).toBe("waiting");
-    expect(waiting.hasPendingApprovals).toBe(true);
+    // Its own status, so no approval styling or counts leak in.
+    expect(waiting.hasPendingApprovals).toBe(false);
+    expect(waiting.externalSessionWaiting).toEqual({ reason: "permission prompt" });
 
     for (const status of ["idle", "ended"] as const) {
       const shell = presentThreadShell(environmentId, {
@@ -111,7 +114,7 @@ describe("V2 client presentation", () => {
         externalSession: externalSession(status),
       });
       expect(shell.runtime?.status).toBe("idle");
-      expect(shell.hasPendingApprovals).toBe(false);
+      expect(shell.externalSessionWaiting).toBeNull();
     }
   });
 

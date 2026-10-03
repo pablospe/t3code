@@ -104,6 +104,8 @@ export interface EnvironmentThreadShell {
   readonly latestUserMessageAt: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  /** A mirrored terminal session is waiting for its user there, with its reason. */
+  readonly externalSessionWaiting: { readonly reason: string | null } | null;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
@@ -266,12 +268,12 @@ export function presentThreadShell(
         : externalSessionRuntime(thread, externalActivity),
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
     hasPendingApprovals:
-      // A waiting external session needs the user where it runs.
-      externalActivity?.status === "waiting" ||
-      (thread.pendingRuntimeRequest !== null &&
-        thread.pendingRuntimeRequest.kind !== "user_input" &&
-        thread.pendingRuntimeRequest.kind !== "auth_refresh"),
+      thread.pendingRuntimeRequest !== null &&
+      thread.pendingRuntimeRequest.kind !== "user_input" &&
+      thread.pendingRuntimeRequest.kind !== "auth_refresh",
     hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    externalSessionWaiting:
+      externalActivity?.status === "waiting" ? { reason: externalActivity.waitingReason } : null,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
