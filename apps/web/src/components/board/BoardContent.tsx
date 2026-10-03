@@ -9,12 +9,12 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import type { EnvironmentId, PlanId, ProjectId } from "@t3tools/contracts";
+import type { PlanId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { ArchiveIcon, PlusIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 
 import { resolvePromptsForThread, useBoardPromptsStore } from "~/boardPromptsStore";
@@ -30,6 +30,7 @@ import {
   useThreadShells,
 } from "~/state/entities";
 import { fetchThreadProjection as fetchThreadProjectionCommand } from "~/state/orchestration";
+import { useEnvironments } from "~/state/environments";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
@@ -44,6 +45,7 @@ import {
   type BoardColumn,
   type BoardColumnKey,
   groupThreadsIntoBoardColumns,
+  isBoardCardDraggable,
   isBoardTransitionAllowed,
   resolveBoardColumn,
   resolveDoneReturnColumn,
@@ -205,7 +207,7 @@ export function BoardContent({
   const navigate = useNavigate();
   const scopedProjectKeys = useProjectScopeStore((state) => state.scopedProjectKeys);
   const scope = scopeOverride !== undefined ? scopeOverride : scopedProjectKeys;
-  const { defaultProjectRef, routeThreadRef } = useHandleNewThread();
+  const { routeThreadRef } = useHandleNewThread();
   // On the full-page board no thread route is active, so the highlight falls
   // back to the thread you last had open - the card you came from.
   const lastOpenThreadRef = useLastOpenThreadStore((state) => state.lastOpenThreadRef);
@@ -517,6 +519,8 @@ export function BoardContent({
       const target = event.over?.id as BoardColumnKey | undefined;
       if (!dragged || !target) return;
       const { thread, column: from } = dragged;
+      // Read-only threads: no lifecycle, mode or run change from a drop.
+      if (!isBoardCardDraggable(thread)) return;
 
       if (from === "done") {
         // Unsettle only lands where the derivation says - the single target
@@ -570,58 +574,65 @@ export function BoardContent({
     ],
   );
 
-  // A single-project scope pins the new task to it; otherwise the contextual
-  // default project decides, same as the sidebar's new-thread.
-  const newTaskProject = useMemo(() => {
-    let projectRef = defaultProjectRef;
-    if (scope?.size === 1) {
-      const [onlyKey] = scope;
-      if (onlyKey) {
-        const separator = onlyKey.indexOf(":");
-        projectRef = scopeProjectRef(
-          onlyKey.slice(0, separator) as EnvironmentId,
-          onlyKey.slice(separator + 1) as ProjectId,
-        );
-      }
-    }
-    if (!projectRef) return null;
-    return (
-      projects.find(
-        (project) =>
-          project.id === projectRef.projectId && project.environmentId === projectRef.environmentId,
-      ) ?? null
+  // Where a new task may go: the scoped projects, or every project when the
+  // board shows all of them. One candidate is used as is; several make the
+  // dialog ask, so a task never lands in a project nobody picked.
+  const { environments } = useEnvironments();
+  const newTaskProjectChoices = useMemo(() => {
+    const candidates = projects.filter(
+      (project) => scope === null || scope.has(boardKey(project.environmentId, project.id)),
     );
-  }, [scope, defaultProjectRef, projects]);
-
-  // A backlog thread is created without a turn, so it still needs a model on
-  // it: the project default, else whatever the user last worked with.
-  const newTaskModelSelection = useMemo(() => {
-    if (newTaskProject?.defaultModelSelection) return newTaskProject.defaultModelSelection;
-    let latestInProject: SidebarThreadSummary | null = null;
+    const titleCounts = new Map<string, number>();
+    for (const project of candidates) {
+      titleCounts.set(project.title, (titleCounts.get(project.title) ?? 0) + 1);
+    }
+    // A backlog thread is created without a run, so it still needs a model:
+    // the project default, else whatever the user last worked with there,
+    // else anywhere.
     let latestAnywhere: SidebarThreadSummary | null = null;
+    const latestByProject = new Map<string, SidebarThreadSummary>();
     for (const thread of threads) {
       if (latestAnywhere === null || thread.updatedAt > latestAnywhere.updatedAt) {
         latestAnywhere = thread;
       }
-      if (
-        newTaskProject &&
-        thread.projectId === newTaskProject.id &&
-        thread.environmentId === newTaskProject.environmentId &&
-        (latestInProject === null || thread.updatedAt > latestInProject.updatedAt)
-      ) {
-        latestInProject = thread;
-      }
+      const key = boardKey(thread.environmentId, thread.projectId);
+      const latest = latestByProject.get(key);
+      if (!latest || thread.updatedAt > latest.updatedAt) latestByProject.set(key, thread);
     }
-    return latestInProject?.modelSelection ?? latestAnywhere?.modelSelection ?? null;
-  }, [newTaskProject, threads]);
+    return candidates
+      .map((project) => {
+        const key = boardKey(project.environmentId, project.id);
+        const environmentLabel =
+          environments.find((candidate) => candidate.environmentId === project.environmentId)
+            ?.label ?? null;
+        return {
+          key,
+          project,
+          // Same-named projects on different machines need the machine to tell apart.
+          label:
+            (titleCounts.get(project.title) ?? 0) > 1 && environmentLabel
+              ? `${project.title} (${environmentLabel})`
+              : project.title,
+          modelSelection:
+            project.defaultModelSelection ??
+            latestByProject.get(key)?.modelSelection ??
+            latestAnywhere?.modelSelection ??
+            null,
+          taskFieldsSupported: supportsTaskDetails(project.environmentId),
+        };
+      })
+      .toSorted((left, right) => left.label.localeCompare(right.label));
+  }, [projects, scope, threads, environments, supportsTaskDetails]);
 
   const openBacklogDialog = useCallback(() => setBacklogDialogOpen(true), []);
 
   // A backlog task is a thread with a title and no run: it sits in Backlog
   // until a drop starts it.
   const createBacklogTask = useCallback(
-    async ({ title, details, presetId }: BoardBacklogTaskDraft) => {
-      if (!newTaskProject || !newTaskModelSelection) return;
+    async ({ title, details, presetId, projectKey }: BoardBacklogTaskDraft) => {
+      const choice = newTaskProjectChoices.find((candidate) => candidate.key === projectKey);
+      if (!choice || choice.modelSelection === null) return;
+      const { project: newTaskProject, modelSelection: newTaskModelSelection } = choice;
       // The id is minted here so the task's board fields can be patched onto
       // the thread the create command produces.
       const threadId = newThreadId();
@@ -641,7 +652,7 @@ export function BoardContent({
       // Nothing to say means no second command: a bare task rides the create
       // alone rather than a no-op metadata update.
       if (created._tag !== "Success" || (!details && !presetId)) return;
-      if (!supportsTaskDetails(newTaskProject.environmentId)) return;
+      if (!choice.taskFieldsSupported) return;
       void updateThreadMetadata({
         environmentId: newTaskProject.environmentId,
         input: {
@@ -651,13 +662,7 @@ export function BoardContent({
         },
       });
     },
-    [
-      createThread,
-      updateThreadMetadata,
-      newTaskProject,
-      newTaskModelSelection,
-      supportsTaskDetails,
-    ],
+    [createThread, updateThreadMetadata, newTaskProjectChoices],
   );
 
   // Edit saves the task fields in one metadata update; empty details and the
@@ -768,14 +773,9 @@ export function BoardContent({
           setBacklogDialogOpen(false);
           setEditTask(null);
         }}
-        projectTitle={newTaskProject?.title ?? null}
-        modelAvailable={newTaskProject !== null && newTaskModelSelection !== null}
+        projectChoices={newTaskProjectChoices}
         initial={editInitial}
-        taskFieldsSupported={
-          editTask
-            ? supportsTaskDetails(editTask.environmentId)
-            : newTaskProject === null || supportsTaskDetails(newTaskProject.environmentId)
-        }
+        editTaskFieldsSupported={editTask !== null && supportsTaskDetails(editTask.environmentId)}
         onSubmit={editTask ? saveTaskEdit : (draft) => void createBacklogTask(draft)}
       />
       {/* dropAnimation off: the source card never moved (the overlay is the
