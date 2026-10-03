@@ -46,6 +46,7 @@ const LIVE = "11111111-1111-4111-8111-111111111111";
 const T3_OWNED = "22222222-2222-4222-8222-222222222222";
 const LEGACY = "33333333-3333-4333-8333-333333333333";
 const OBSERVER = "44444444-4444-4444-8444-444444444444";
+const RESUMED = "55555555-5555-4555-8555-555555555555";
 const projectId = ProjectId.make("project:attached");
 
 const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-attached-sessions-"));
@@ -102,6 +103,7 @@ const makeTestLayer = (input: {
   readonly roster: Ref.Ref<ReadonlyArray<ClaudeAgentsRosterEntry>>;
   readonly sends: Ref.Ref<ReadonlyArray<AttachedSessionSendInput>>;
   readonly legacyImports: Ref.Ref<ReadonlyArray<ThreadId>>;
+  readonly enabled?: boolean;
 }) => {
   const orchestration = Layer.mergeAll(
     database,
@@ -153,7 +155,7 @@ const makeTestLayer = (input: {
               Effect.as({ importedThreadCount: 0, importedMessageCount: 0 }),
             ),
         }),
-        ServerSettings.layerTest({ enableAttachedSessions: true }),
+        ServerSettings.layerTest({ enableAttachedSessions: input.enabled ?? true }),
         ServerConfig.layerTest(workspace, stateBase),
       ),
     ),
@@ -433,15 +435,65 @@ it.effect("adopts a thread the V1 mirror created instead of duplicating it", () 
   });
 });
 
-/** The V1 mirror's cursor for LEGACY, already covering `offset` bytes of its transcript. */
-function writeLegacyCursor(stateDir: string, offset: number) {
+it.effect("brings a settled thread back when its session resumes, whatever the cursor says", () => {
+  appendTranscript(RESUMED, userText("r1", "before the upgrade"));
+  const offset = NodeFS.statSync(transcriptPath(RESUMED)).size;
+  return Effect.gen(function* () {
+    const roster = yield* Ref.make<ReadonlyArray<ClaudeAgentsRosterEntry>>([
+      rosterEntry(RESUMED, "busy"),
+    ]);
+    const sends = yield* Ref.make<ReadonlyArray<AttachedSessionSendInput>>([]);
+    const legacyImports = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+    yield* Effect.gen(function* () {
+      const mirror = yield* AttachedSessions.AttachedSessions;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      const threadId = attachedClaudeThreadId(RESUMED);
+      const now = yield* DateTime.now;
+      // The V1 mirror settled this thread; its cursor never recorded that.
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("event:resumed:thread"),
+            type: "thread.created",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...fixtureThread(threadId, now),
+              historyOrigin: "v1_import",
+              settledOverride: "settled",
+              settledAt: now,
+            },
+          },
+        ],
+      });
+      writeLegacyCursor(config.stateDir, offset, RESUMED);
+      const sweep = mirror.sweep("roster").pipe(Effect.andThen(mirror.drain));
+
+      // First boot with the mirror off ends every open session.
+      yield* sweep;
+      assert.equal((yield* projectionOf(threadId)).thread.settledOverride, "settled");
+
+      // Turned on while the session runs: the thread is active again.
+      yield* settings.updateSettings({ enableAttachedSessions: true });
+      yield* sweep;
+      const projection = yield* projectionOf(threadId);
+      assert.equal(projection.thread.settledOverride, "active");
+      assert.equal(projection.thread.externalSession?.activity?.status, "running");
+    }).pipe(Effect.provide(makeTestLayer({ roster, sends, legacyImports, enabled: false })));
+  });
+});
+
+/** A V1 mirror cursor for `sessionId`, already covering `offset` bytes of its transcript. */
+function writeLegacyCursor(stateDir: string, offset: number, sessionId = LEGACY) {
   NodeFS.mkdirSync(stateDir, { recursive: true });
   NodeFS.writeFileSync(
     NodePath.join(stateDir, "attached-sessions.json"),
     JSON.stringify({
       sessions: {
-        [LEGACY]: {
-          transcriptPath: transcriptPath(LEGACY),
+        [sessionId]: {
+          transcriptPath: transcriptPath(sessionId),
           offset,
           status: "running",
           waitRequestId: null,
