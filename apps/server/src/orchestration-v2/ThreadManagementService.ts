@@ -51,6 +51,7 @@ export function withCreationProvenance(
     case "thread.fork":
     case "thread.merge_back":
     case "delegated_task.request":
+    case "thread.external-session.message.send":
       return { ...command, ...provenance };
     default:
       return command;

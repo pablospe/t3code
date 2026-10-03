@@ -44,6 +44,9 @@ import { layer as providerTurnStartServiceLayer } from "./ProviderTurnStartServi
 import { layer as runExecutionServiceLayer } from "./RunExecutionService.ts";
 import { layer as runFinalizationServiceLayer } from "./RunFinalizationService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as AttachedSessionSender from "../attachedSessions/AttachedSessionSender.ts";
+import * as ClaudeAgentsRoster from "../attachedSessions/ClaudeAgentsRoster.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts";
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
@@ -267,6 +270,19 @@ const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
 const threadTitleRegenerationProvided = threadTitleRegenerationServiceLayer.pipe(
   Layer.provide(Layer.mergeAll(threadManagementProvided, ProjectStore.layer, TextGeneration.layer)),
 );
+export const ClaudeAgentsRosterLayerLive = ClaudeAgentsRoster.layer.pipe(
+  Layer.provide(ProcessRunner.layer),
+);
+const attachedSessionSenderProvided = AttachedSessionSender.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      eventSinkProvided,
+      idAllocatorLayer,
+      projectionStoreLayer,
+      ClaudeAgentsRosterLayerLive,
+    ),
+  ),
+);
 const effectExecutorProvided = effectExecutorLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -278,6 +294,7 @@ const effectExecutorProvided = effectExecutorLayer.pipe(
       runtimeRequestServiceProvided,
       threadTitleRegenerationProvided,
       threadManagementProvided,
+      attachedSessionSenderProvided,
     ),
   ),
 );

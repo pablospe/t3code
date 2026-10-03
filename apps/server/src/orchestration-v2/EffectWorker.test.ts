@@ -29,6 +29,7 @@ import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as AttachedSessionSender from "../attachedSessions/AttachedSessionSender.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 const threadId = ThreadId.make("thread:effect-worker-restart");
@@ -149,6 +150,7 @@ function makeExecutorLayer(input: {
       Layer.mergeAll(
         dependencies,
         Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(AttachedSessionSender.AttachedSessionSender)({}),
         ServerSettings.layerTest(),
       ),
     ),

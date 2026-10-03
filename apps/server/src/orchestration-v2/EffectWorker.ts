@@ -28,6 +28,7 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
+import * as AttachedSessionSender from "../attachedSessions/AttachedSessionSender.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -90,6 +91,7 @@ export const executorLayer: Layer.Layer<
   | ThreadTitleRegenerationService.ThreadTitleRegenerationService
   | ThreadManagementService.ThreadManagementService
   | ServerSettings.ServerSettingsService
+  | AttachedSessionSender.AttachedSessionSender
 > = Layer.effect(
   OrchestrationEffectExecutorV2,
   Effect.gen(function* () {
@@ -104,6 +106,7 @@ export const executorLayer: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const attachedSessionSender = yield* AttachedSessionSender.AttachedSessionSender;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect, options) => {
         const willRetry = options?.willRetry ?? false;
@@ -435,6 +438,12 @@ export const executorLayer: Layer.Layer<
                   }),
               ),
             );
+          case "external-session.message.send":
+            return attachedSessionSender.send({
+              threadId: effect.threadId,
+              requestId: effect.commandId,
+              text: effect.request.text,
+            });
           case "thread-title.generate":
             return threadTitleRegeneration
               .execute({

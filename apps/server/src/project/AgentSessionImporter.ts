@@ -14,6 +14,7 @@ import {
   ProviderDriverKind,
   ThreadId,
   TurnItemId,
+  attachedClaudeThreadId,
   type AgentSessionImportInput,
   type AgentSessionImportResult,
   type OrchestrationV2AppThread,
@@ -236,6 +237,22 @@ const make = Effect.gen(function* () {
             yield* runtimes.recordImportedTranscript({ threadId, source }).pipe(Effect.ignore);
           }
           return;
+        }
+
+        // A Claude session belongs to one thread. One the attached-session mirror
+        // already shows stays there; the mirror in turn skips sessions with a
+        // provider thread, which an import creates (#10933).
+        if (outcome.thread.source === "claudeAgent") {
+          const attached = yield* Effect.option(
+            orchestrator.getThreadRecords(
+              attachedClaudeThreadId(outcome.thread.providerSessionId),
+              [],
+            ),
+          );
+          if (Option.isSome(attached) && attached.value.thread.deletedAt === null) {
+            skippedCount += 1;
+            return;
+          }
         }
 
         const imported = yield* Effect.gen(function* () {
