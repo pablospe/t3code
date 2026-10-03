@@ -227,16 +227,22 @@ it.effect("mirrors a terminal session, keeps T3 control off it, and relays messa
             threadId: t3ThreadId,
             occurredAt: now,
             payload: {
+              // A run's provider thread keeps its pending id; the native
+              // session id only lands in its native ref.
               id: IdAllocator.deriveProviderThread({
                 driver: ProviderDriverKind.make("claudeAgent"),
-                nativeThreadId: T3_OWNED,
+                nativeThreadId: "pending:run:thread:t3-owned:ordinal:1",
               }),
               driver: ProviderDriverKind.make("claudeAgent"),
               providerInstanceId: ATTACHED_CLAUDE_INSTANCE_ID,
               providerSessionId: null,
               appThreadId: t3ThreadId,
               ownerNodeId: null,
-              nativeThreadRef: null,
+              nativeThreadRef: {
+                driver: ProviderDriverKind.make("claudeAgent"),
+                nativeId: T3_OWNED,
+                strength: "strong",
+              },
               nativeConversationHeadRef: null,
               status: "idle",
               firstRunOrdinal: null,

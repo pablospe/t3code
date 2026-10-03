@@ -696,9 +696,14 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
 
     const isOwnedByT3 = Effect.fn("AttachedSessions.isOwnedByT3")(function* (sessionId: string) {
       if (ownedByT3.has(sessionId)) return true;
-      const owner = yield* projectionStore.getProviderThreadOwner(
-        IdAllocator.deriveProviderThread({ driver: CLAUDE_DRIVER, nativeThreadId: sessionId }),
-      );
+      const owner = yield* projectionStore.getNativeThreadOwner({
+        driver: CLAUDE_DRIVER,
+        nativeThreadId: sessionId,
+        derivedProviderThreadId: IdAllocator.deriveProviderThread({
+          driver: CLAUDE_DRIVER,
+          nativeThreadId: sessionId,
+        }),
+      });
       if (owner !== null) ownedByT3.add(sessionId);
       return owner !== null;
     });
@@ -733,10 +738,15 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       for (const entry of snapshot.value.sessions) {
         // claude-mem's observer sessions are not agents the user drives.
         if (isClaudeMemObserverSession(entry.cwd)) continue;
-        // A session T3 runs or took over already has its own thread. Checked on
-        // every sweep: while a run starts, T3 does not know its native session
-        // id yet, so only the process ancestry gives it away at first.
-        if (entry.spawnedByServer || (yield* isOwnedByT3(entry.sessionId))) {
+        // A session T3 runs or took over already has its own thread. Process
+        // ancestry is checked on every sweep: while a run starts T3 does not
+        // know its native session id yet. The database lookup, a scan, runs
+        // once per session the mirror has not taken.
+        if (
+          entry.spawnedByServer ||
+          ownedByT3.has(entry.sessionId) ||
+          (!all.has(entry.sessionId) && (yield* isOwnedByT3(entry.sessionId)))
+        ) {
           ownedByT3.add(entry.sessionId);
           const tracked = all.get(entry.sessionId);
           if (tracked !== undefined) yield* isolated(tracked, disown(tracked, all));

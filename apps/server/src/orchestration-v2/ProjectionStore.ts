@@ -25,6 +25,7 @@ import type {
   OrchestrationV2TurnItem,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderDriverKind,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
@@ -315,10 +316,17 @@ export interface ProjectionStoreV2Shape {
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
   ) => Effect.Effect<number, ProjectionStoreV2Error>;
-  /** The app thread a provider thread belongs to, if any thread has it. */
-  readonly getProviderThreadOwner: (
-    providerThreadId: ProviderThreadId,
-  ) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
+  /**
+   * The app thread whose provider thread runs this native thread (a Claude
+   * session id, for example), if any. Matches the id derived from the native
+   * id and the native ref a run records once it learns the id, since a run's
+   * provider thread keeps the id it was given while still pending.
+   */
+  readonly getNativeThreadOwner: (input: {
+    readonly driver: ProviderDriverKind;
+    readonly nativeThreadId: string;
+    readonly derivedProviderThreadId: ProviderThreadId;
+  }) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
   readonly getThreadRecords: <K extends ProjectionRecordField>(
     threadId: ThreadId,
     fields: ReadonlyArray<K>,
@@ -4474,12 +4482,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError(controlReadError(threadId)),
       );
 
-    const getProviderThreadOwner: ProjectionStoreV2Shape["getProviderThreadOwner"] = (
-      providerThreadId,
-    ) =>
+    const getNativeThreadOwner: ProjectionStoreV2Shape["getNativeThreadOwner"] = (input) =>
       sql<{ thread_id: string }>`SELECT thread_id
         FROM orchestration_v2_projection_provider_threads
-        WHERE provider_thread_id = ${providerThreadId}`.pipe(
+        WHERE provider_thread_id = ${input.derivedProviderThreadId}
+          OR (driver = ${input.driver}
+            AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${input.nativeThreadId})
+        LIMIT 1`.pipe(
         Effect.map((rows) => (rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id))),
         Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
       );
@@ -5491,7 +5500,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       hasUnpairedRunInterruptRequest,
       getMessageCount,
       getNextTurnItemOrdinal,
-      getProviderThreadOwner,
+      getNativeThreadOwner,
       getThreadRecords,
       getRuntimeRequest,
       getPlan,
@@ -5738,12 +5747,17 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 ?.turnItems.reduce((max, item) => Math.max(max, item.ordinal), 0) ?? 0) + 1,
           ),
         ),
-      getProviderThreadOwner: (providerThreadId) =>
+      getNativeThreadOwner: (input) =>
         Ref.get(replayState).pipe(
           Effect.map(
             (state) =>
               [...state.projections.values()].find((projection) =>
-                projection.providerThreads.some((thread) => thread.id === providerThreadId),
+                projection.providerThreads.some(
+                  (thread) =>
+                    thread.id === input.derivedProviderThreadId ||
+                    (thread.driver === input.driver &&
+                      thread.nativeThreadRef?.nativeId === input.nativeThreadId),
+                ),
               )?.thread.id ?? null,
           ),
         ),
