@@ -114,6 +114,7 @@ import {
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
+import { useProjectScopeStore } from "../projectScopeStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
@@ -420,7 +421,7 @@ function SidebarProviderStack(props: {
   );
 }
 
-function SidebarThreadTooltip({
+export function SidebarThreadTooltip({
   thread,
   project,
   projectDisplayName,
@@ -2569,6 +2570,11 @@ export default function Sidebar() {
       setProjectScopeKey(null);
     }
   }, [allProjectSnapshotsReady, projectScopeKey, scopedProjectGroup, setProjectScopeKey]);
+  // The board (page and drawer) follows this selector instead of owning one.
+  const setBoardProjectScope = useProjectScopeStore((state) => state.setScopedProjectKeys);
+  useEffect(() => {
+    setBoardProjectScope(scopedProjectKeys);
+  }, [scopedProjectKeys, setBoardProjectScope]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
