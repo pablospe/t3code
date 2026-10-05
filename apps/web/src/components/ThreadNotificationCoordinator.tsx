@@ -8,6 +8,7 @@ import {
   CircleCheckIcon,
   MessageCircleQuestionIcon,
   ShieldQuestionIcon,
+  SquareTerminalIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 
@@ -123,7 +124,11 @@ function EnvironmentNotifications({
       const attention =
         status === "input" || status === "approval" || status === "failed" || status === "limited"
           ? `${thread.latestRun?.runId ?? ""}:${status}`
-          : null;
+          : // A mirrored terminal session: one alert for entering waiting,
+            // none while it keeps waiting, even if the reason changes.
+            status === "terminal"
+            ? "terminal"
+            : null;
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       // Commands left running (a dev server) read as ready; subagents and monitors wait.
       const completion =
@@ -144,13 +149,17 @@ function EnvironmentNotifications({
       const title =
         kind === "completion"
           ? "Thread completed"
-          : status === "approval"
-            ? "Approval needed"
-            : status === "limited"
-              ? "Usage limit reached"
-              : status === "failed"
-                ? "Thread failed"
-                : "Input needed";
+          : status === "terminal"
+            ? thread.externalSessionWaiting?.reason
+              ? `Waiting in terminal: ${thread.externalSessionWaiting.reason}`
+              : "Waiting in terminal"
+            : status === "approval"
+              ? "Approval needed"
+              : status === "limited"
+                ? "Usage limit reached"
+                : status === "failed"
+                  ? "Thread failed"
+                  : "Input needed";
       if (hasNotificationSound(mode)) {
         void playNotificationSound(kind, () =>
           hasNotificationSound(getClientSettings().notificationMode),
@@ -173,6 +182,8 @@ function EnvironmentNotifications({
                 <CircleCheckIcon aria-hidden className="size-4 text-success-foreground" />
               ) : status === "approval" ? (
                 <ShieldQuestionIcon aria-hidden className="size-4 text-warning-foreground" />
+              ) : status === "terminal" ? (
+                <SquareTerminalIcon aria-hidden className="size-4 text-info-foreground" />
               ) : status === "failed" ? (
                 <CircleAlertIcon aria-hidden className="size-4 text-destructive-foreground" />
               ) : (

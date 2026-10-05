@@ -6,7 +6,7 @@ import type {
   Project,
   ThreadId,
 } from "@t3tools/contracts";
-import { ProviderInstanceId, RuntimeRequestId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, RuntimeRequestId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { projectThreadAwarenessV2 } from "./agentAwareness.ts";
@@ -74,6 +74,37 @@ describe("projectThreadAwarenessV2", () => {
       ).toBeNull();
     },
   );
+
+  it("surfaces a mirrored terminal session only while it waits for its user", () => {
+    const terminal = (status: "running" | "waiting" | "idle" | "ended") => ({
+      ...v2Thread({ status: "idle" }),
+      externalSession: {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        nativeSessionId: "terminal-session",
+        activity: {
+          status,
+          waitingReason: status === "waiting" ? "permission prompt" : null,
+          workStartedAt: null,
+        },
+      },
+    });
+    const awareness = (status: "running" | "waiting" | "idle" | "ended") =>
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: terminal(status),
+      });
+    expect(awareness("waiting")).toMatchObject({
+      phase: "waiting_for_approval",
+      headline: "Waiting in terminal",
+      detail: "Waiting in terminal: permission prompt",
+    });
+    // Working, resting and ended sessions publish nothing, so an alert only
+    // comes from entering waiting.
+    for (const status of ["running", "idle", "ended"] as const) {
+      expect(awareness(status)).toBeNull();
+    }
+  });
 
   it("keeps an older activity run visible over a newer cancelled run", () => {
     expect(

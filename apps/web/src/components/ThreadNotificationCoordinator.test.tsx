@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   turnError: false,
   limited: false,
   subagent: false,
+  terminal: null as "running" | "waiting" | "idle" | "ended" | null,
+  terminalReason: "permission prompt",
   background: [] as Array<{ taskId: string; kind: "command" | "monitor" }>,
   add: vi.fn(
     (_toast: { title: string; description: string; actionProps: { onClick: () => void } }) =>
@@ -84,6 +86,21 @@ function mockThreadShell() {
     settledAt: null,
     lastVisitedAt: null,
     deletedAt: null,
+    ...(state.terminal === null
+      ? {}
+      : {
+          latestRunId: null,
+          status: "idle",
+          externalSession: {
+            driver: "claudeAgent",
+            nativeSessionId: "terminal-session",
+            activity: {
+              status: state.terminal,
+              waitingReason: state.terminal === "waiting" ? state.terminalReason : null,
+              workStartedAt: null,
+            },
+          },
+        }),
   };
 }
 
@@ -153,6 +170,8 @@ beforeEach(() => {
     turnError: false,
     limited: false,
     subagent: false,
+    terminal: null,
+    terminalReason: "permission prompt",
     background: [],
   });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -249,6 +268,32 @@ describe("thread notifications", () => {
       tag: "env-1:thread-1",
       silent: true,
     });
+  });
+
+  it("alerts once when a terminal session starts waiting, with its reason", async () => {
+    state.terminal = "running";
+    await render();
+    state.terminal = "waiting";
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.add.mock.calls[0]?.[0]).toMatchObject({
+      title: "Waiting in terminal: permission prompt",
+    });
+
+    // Still waiting, even for something else: no repeat.
+    state.terminalReason = "input";
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+
+    // Idle and ended stay quiet; waiting again alerts again.
+    state.terminal = "idle";
+    await render();
+    state.terminal = "ended";
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    state.terminal = "waiting";
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(2);
   });
 
   it("alerts when only a dev server is left running, not while a monitor can wake the agent", async () => {
