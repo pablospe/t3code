@@ -45,6 +45,13 @@ export interface ThreadDetailsPanelProps extends Pick<
   draftId?: DraftId;
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  /**
+   * The thread mirrors a session running outside T3 (claude in a terminal),
+   * which owns its folder: T3 offers no scripts, Git actions or branch
+   * changes there (Initialize Git, checkout, commit), only opening the folder
+   * and read-only details.
+   */
+  workspaceOwnedElsewhere?: boolean;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -178,7 +185,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
-              {props.activeProjectScripts ? (
+              {props.activeProjectScripts && !props.workspaceOwnedElsewhere ? (
                 <ProjectScriptsControl
                   displayMode="panel"
                   scripts={props.activeProjectScripts}
@@ -194,7 +201,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             </div>
           </ThreadDetailsSection>
 
-          {props.gitCwd ? (
+          {props.gitCwd && !props.workspaceOwnedElsewhere ? (
             <ThreadDetailsSection
               headingId="thread-details-version-control-heading"
               title="Version Control"

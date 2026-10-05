@@ -43,6 +43,7 @@ export interface ProjectThreadAwarenessV2Input {
   readonly thread: Pick<
     OrchestrationV2ThreadShell,
     | "activityRunStatus"
+    | "externalSession"
     | "id"
     | "lineage"
     | "modelSelection"
@@ -64,19 +65,24 @@ export function projectThreadAwarenessV2(
   if (phase === null) {
     return null;
   }
+  const waitingReason = thread.externalSession?.activity?.waitingReason ?? null;
   const detail =
-    phase === "completed"
-      ? "Review the completed task."
-      : phase === "failed"
-        ? "The agent run failed."
-        : undefined;
+    thread.externalSession != null
+      ? waitingReason === null
+        ? undefined
+        : `Waiting in terminal: ${waitingReason}`
+      : phase === "completed"
+        ? "Review the completed task."
+        : phase === "failed"
+          ? "The agent run failed."
+          : undefined;
   return {
     environmentId,
     threadId: thread.id,
     projectTitle: project.title,
     threadTitle: thread.title,
     phase,
-    headline: headlineForPhase(phase),
+    headline: thread.externalSession != null ? "Waiting in terminal" : headlineForPhase(phase),
     ...(detail === undefined ? {} : { detail }),
     modelTitle: thread.modelSelection.model,
     updatedAt: DateTime.formatIso(thread.updatedAt),
@@ -87,6 +93,12 @@ export function projectThreadAwarenessV2(
 function resolveThreadAwarenessPhaseV2(
   thread: ProjectThreadAwarenessV2Input["thread"],
 ): AgentAwarenessPhase | null {
+  // A mirrored terminal session only surfaces while it waits for its user
+  // there. Its working and idle stretches stay quiet: there is no T3 run to
+  // follow, and one card per busy terminal would drown out real runs.
+  if (thread.externalSession != null) {
+    return thread.externalSession.activity?.status === "waiting" ? "waiting_for_approval" : null;
+  }
   if (thread.pendingRuntimeRequest?.kind === "user_input") {
     return "waiting_for_input";
   }
