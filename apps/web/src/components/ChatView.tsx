@@ -10435,6 +10435,7 @@ export default function ChatView(props: ChatViewProps) {
     ...(draftId ? { draftId } : {}),
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject ? activeProjectScripts : undefined,
+    workspaceOwnedElsewhere: externalSession !== null,
     preferredScriptId: activeProject
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)
       : null,
