@@ -8,13 +8,13 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -23,15 +23,15 @@ const adapter = {
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("Task fields never start a provider"),
-} as ProviderAdapterV2Shape;
-const database = SqlitePersistenceMemory;
-const testLayer = Layer.mergeAll(
-  database,
-  ProjectionStore.layer.pipe(Layer.provide(database)),
-  makeOrchestratorV2ReplayLayerWithRegistry(
+} as ProviderAdapter.ProviderAdapterV2["Service"];
+const layerDatabase = SqlitePersistence.layerMemory;
+const layerTest = Layer.mergeAll(
+  layerDatabase,
+  ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+  ProviderReplayHarness.layerWithRegistry(
     { name: "task-details" },
-    ProviderAdapterRegistry.makeLayer([adapter]),
-    { databaseLayer: database, runEffectWorker: false },
+    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    { databaseLayer: layerDatabase, runEffectWorker: false },
   ),
 );
 
@@ -113,5 +113,5 @@ it.effect("thread.metadata.update sets, keeps and clears board task fields", () 
       workflowPreset: null,
     });
     yield* expectEverywhere({ taskDetails: null, workflowPreset: null });
-  }).pipe(Effect.provide(testLayer)),
+  }).pipe(Effect.provide(layerTest)),
 );
