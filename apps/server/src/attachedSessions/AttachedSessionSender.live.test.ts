@@ -21,7 +21,7 @@ import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import { layerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { attachedThread } from "./AttachedSessionMapper.ts";
@@ -90,9 +90,9 @@ describe.runIf(sessionId !== undefined)("AttachedSessionSender live relay", () =
           yield* Effect.logInfo(`attached-sessions live relay delivered ${nonce}`);
         }).pipe(
           Effect.provide(
-            makeOrchestratorV2ReplayLayerWithRegistry(
+            layerWithRegistry(
               { name: "attached-sessions-live" },
-              ProviderAdapterRegistry.makeLayer([]),
+              ProviderAdapterRegistry.layerFromAdapters([]),
               { runEffectWorker: false, attachedSessionDeliver: deliver },
             ),
           ),

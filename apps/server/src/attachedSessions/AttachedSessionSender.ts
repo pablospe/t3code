@@ -49,7 +49,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { resolveClaudeSdkExecutablePath } from "../provider/Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
@@ -62,6 +62,7 @@ const RELAY_MODEL = "claude-haiku-4-5-20251001";
 const SEND_TIMEOUT = "60 seconds";
 const CLAUDE_INSTANCE_ID = ProviderInstanceId.make("claudeAgent");
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
+const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 
 export class AttachedMessageSendError extends Schema.TaggedError<AttachedMessageSendError>()(
   "AttachedMessageSendError",
@@ -361,7 +362,7 @@ export const makeAgentSdkDeliver: Effect.Effect<
         const settings = yield* serverSettings.getSettings;
         const claudeSettings = Option.getOrElse(
           decodeClaudeSettings(settings.providerInstances[CLAUDE_INSTANCE_ID]?.config ?? {}),
-          () => settings.providers.claudeAgent,
+          () => DEFAULT_CLAUDE_SETTINGS,
         );
         const environment = yield* makeClaudeEnvironment(claudeSettings).pipe(
           Effect.provideService(Path.Path, path),

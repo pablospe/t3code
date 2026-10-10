@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
@@ -60,7 +60,7 @@ it.effect("imports messages once and preserves the provider native resume bindin
         },
       }),
   });
-  const testLayer = AgentSessionImporter.layer.pipe(
+  const layerTest = AgentSessionImporter.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
@@ -144,7 +144,7 @@ it.effect("imports messages once and preserves the provider native resume bindin
       }),
     ]);
     expect(recorded).toHaveLength(2);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("leaves a Claude session the attached-session mirror already shows to the mirror", () => {
