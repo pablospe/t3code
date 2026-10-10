@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { expandHomePath } from "../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { ProcessRunner } from "../processRunner.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -32,6 +32,7 @@ const RosterEntry = Schema.Struct({
 const decodeRosterEntry = Schema.decodeUnknownOption(RosterEntry);
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
+const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 
 export interface ClaudeAgentsRosterEntry {
   readonly sessionId: string;
@@ -184,13 +185,16 @@ export const layer = Layer.effect(
       const settings = yield* serverSettings.getSettings;
       const claudeSettings = Option.getOrElse(
         decodeClaudeSettings(settings.providerInstances[CLAUDE_INSTANCE_ID]?.config ?? {}),
-        () => settings.providers.claudeAgent,
+        () => DEFAULT_CLAUDE_SETTINGS,
       );
       const env = yield* makeClaudeEnvironment(claudeSettings).pipe(
         Effect.provideService(Path.Path, path),
       );
       const configDir = path.resolve(
-        expandHomePath(env.CLAUDE_CONFIG_DIR?.trim() || path.join(NodeOS.homedir(), ".claude")),
+        expandHomePath(
+          env.CLAUDE_CONFIG_DIR?.trim() || path.join(NodeOS.homedir(), ".claude"),
+          NodeOS.homedir(),
+        ),
       );
       const result = yield* processRunner.run({
         command: claudeSettings.binaryPath,

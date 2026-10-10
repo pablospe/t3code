@@ -16,8 +16,6 @@
  * id, and the mirror skips it; the importer in turn skips sessions this mirror
  * already covers (#10933).
  */
-import * as NodeCrypto from "node:crypto";
-
 import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ChatImageAttachment,
@@ -43,10 +41,10 @@ import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
-import { resolveAttachmentPath, toSafeThreadAttachmentSegment } from "../attachmentStore.ts";
+import { createDeterministicAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as LegacyV1ThreadImporter from "../orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -382,29 +380,21 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
       session: TrackedSession,
       entry: Extract<AttachedTranscriptEntry, { kind: "message" }>,
     ) {
-      const threadSegment = toSafeThreadAttachmentSegment(session.threadId);
       const attachments: Array<ChatImageAttachment> = [];
       for (const [index, image] of entry.images.entries()) {
         const bytes = Buffer.from(image.base64, "base64");
+        const id = createDeterministicAttachmentId(session.threadId, `${entry.uuid}:${index}`);
         if (
-          threadSegment === null ||
+          id === null ||
           !image.mediaType.toLowerCase().startsWith("image/") ||
           bytes.byteLength === 0 ||
           bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
         ) {
           continue;
         }
-        const hash = NodeCrypto.createHash("sha256").update(`${entry.uuid}:${index}`).digest("hex");
-        const uuid = [
-          hash.slice(0, 8),
-          hash.slice(8, 12),
-          hash.slice(12, 16),
-          hash.slice(16, 20),
-          hash.slice(20, 32),
-        ].join("-");
         const attachment: ChatImageAttachment = {
           type: "image",
-          id: `${threadSegment}-${uuid}`,
+          id,
           name: `terminal-image-${index + 1}`,
           mimeType: image.mediaType.toLowerCase(),
           sizeBytes: bytes.byteLength,

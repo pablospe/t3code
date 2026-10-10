@@ -28,14 +28,14 @@ import * as Ref from "effect/Ref";
 import * as ServerConfig from "../config.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as LegacyV1ThreadImporter from "../orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { buildActiveShellSnapshot } from "../orchestration-v2/ShellStream.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { layerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -106,7 +106,7 @@ const rosterEntry = (
   spawnedByServer,
 });
 
-const database = SqlitePersistenceMemory;
+const database = Sqlite.layerMemory;
 const makeTestLayer = (input: {
   readonly roster: Ref.Ref<ReadonlyArray<ClaudeAgentsRosterEntry>>;
   readonly sends: Ref.Ref<ReadonlyArray<AttachedSessionSendInput>>;
@@ -116,9 +116,9 @@ const makeTestLayer = (input: {
   const orchestration = Layer.mergeAll(
     database,
     ProjectionStore.layer.pipe(Layer.provide(database)),
-    makeOrchestratorV2ReplayLayerWithRegistry(
+    layerWithRegistry(
       { name: "attached-sessions" },
-      ProviderAdapterRegistry.makeLayer([]),
+      ProviderAdapterRegistry.layerFromAdapters([]),
       {
         databaseLayer: database,
         runEffectWorker: false,

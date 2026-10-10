@@ -2,7 +2,7 @@ import type { ThreadId } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import {
   WS_METHODS,
   type EnvironmentId,
@@ -21,6 +21,7 @@ import {
   type ThreadCommandInput,
   type ArchiveThreadInput,
   type CancelQueuedRunInput,
+  type RetryWorkspacePreparationInput,
   type CreateThreadInput,
   type DeleteThreadInput,
   type EditQueuedRunInput,
@@ -66,6 +67,7 @@ import {
   promoteQueuedRun,
   reorderQueuedRun,
   resumeThreadQueue,
+  retryWorkspacePreparation,
   linkThreadPullRequest,
   respondToThreadApproval,
   respondToThreadUserInput,
@@ -97,6 +99,7 @@ import * as ThreadHistoryController from "./threadHistoryController.ts";
 
 export type LoadEarlierThreadHistoryInput = {
   readonly threadId: ThreadId;
+  readonly throughEntryId?: string;
 };
 
 export type {
@@ -365,6 +368,12 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    retryWorkspacePreparation: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:retry-workspace-preparation",
+      execute: (input: RetryWorkspacePreparationInput) => retryWorkspacePreparation(input),
+      scheduler,
+      concurrency,
+    }),
     editQueuedRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:edit-queued-run",
       execute: (input: EditQueuedRunInput) => editQueuedRun(input),
@@ -387,6 +396,7 @@ export function createThreadEnvironmentAtoms<R, E>(
           return yield* controller.value.loadEarlier(
             supervisor.target.environmentId,
             input.threadId,
+            input.throughEntryId,
           );
         }),
       scheduler,

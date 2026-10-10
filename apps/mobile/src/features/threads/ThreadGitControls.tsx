@@ -1,6 +1,7 @@
 import { createNativeHeaderMenu } from "../../components/nativeHeaderMenu.ios";
 import type { ScreenHeaderMenu } from "../../components/ScreenHeader.types";
 import {
+  AuthSourceControlWriteScope,
   EnvironmentId,
   type GitRunStackedActionResult,
   type ProjectScript,
@@ -17,13 +18,14 @@ import { NativeHeaderToolbar } from "../../native/StackHeader";
 import { useCallback, useMemo } from "react";
 import { Alert } from "react-native";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { useEnvironmentScope } from "../../state/session";
 import {
   basename,
   getTerminalStatusLabel,
   projectScriptMenuIcon,
-  projectScriptMenuLabel,
   type TerminalMenuSession,
 } from "../terminal/terminalMenu";
+import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -92,6 +94,11 @@ export type ThreadGitMenuProps = {
   readonly onMergeBack?: () => void;
   readonly onPull: () => Promise<void>;
   readonly onRunAction: (input: GitActionRequestInput) => Promise<GitRunStackedActionResult | null>;
+  /**
+   * The thread mirrors a session running outside T3 (claude in a terminal),
+   * which owns its folder: no Git actions or project scripts are offered.
+   */
+  readonly workspaceOwnedElsewhere?: boolean;
 };
 
 type ThreadGitControlsProps = ThreadGitMenuProps & {
@@ -100,6 +107,7 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
     readonly onPress: () => void;
   };
   readonly canOpenTerminal: boolean;
+  readonly canOperateTerminal: boolean;
   readonly canOpenFiles: boolean;
   readonly projectScripts: ReadonlyArray<ProjectScript>;
   readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
@@ -113,6 +121,10 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const navigation = useNavigation();
   const environmentId = props.environmentId;
+  const canWriteSourceControl = useEnvironmentScope(
+    environmentId ? EnvironmentId.make(String(environmentId)) : null,
+    AuthSourceControlWriteScope,
+  );
   const threadId = props.threadId;
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
@@ -122,18 +134,24 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const isDefaultRef = gitStatus?.isDefaultRef ?? false;
 
-  const quickAction = useMemo(
-    () =>
-      isRepo
-        ? resolveQuickAction(gitStatus, busy, isDefaultRef, hasPrimaryRemote)
-        : {
-            label: "Git unavailable",
-            disabled: true,
-            kind: "show_hint" as const,
-            hint: "This workspace is not a git repository.",
-          },
-    [busy, gitStatus, hasPrimaryRemote, isDefaultRef, isRepo],
-  );
+  const quickAction = useMemo(() => {
+    if (!isRepo) {
+      return {
+        label: "Git unavailable",
+        disabled: true,
+        kind: "show_hint" as const,
+        hint: "This workspace is not a git repository.",
+      };
+    }
+    const action = resolveQuickAction(gitStatus, busy, isDefaultRef, hasPrimaryRemote);
+    return !canWriteSourceControl && (action.kind === "run_pull" || action.kind === "run_action")
+      ? {
+          ...action,
+          disabled: true,
+          hint: "This connection cannot change source control.",
+        }
+      : action;
+  }, [busy, canWriteSourceControl, gitStatus, hasPrimaryRemote, isDefaultRef, isRepo]);
 
   const quickActionHint = quickAction.disabled
     ? (quickAction.hint ?? "This action is unavailable.")
@@ -163,6 +181,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 
   const runActionWithPrompt = useCallback(
     async (input: GitActionRequestInput) => {
+      if (!canWriteSourceControl) return;
       const confirmableAction =
         input.action === "push" ||
         input.action === "create_pr" ||
@@ -191,10 +210,19 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 
       await onRunAction(input);
     },
-    [environmentId, gitStatus, isDefaultRef, onRunAction, navigation, threadId],
+    [
+      canWriteSourceControl,
+      environmentId,
+      gitStatus,
+      isDefaultRef,
+      onRunAction,
+      navigation,
+      threadId,
+    ],
   );
 
   const runQuickAction = useCallback(async () => {
+    if (quickAction.disabled) return;
     if (quickAction.kind === "open_pr") {
       await openExistingPr();
       return;
@@ -263,14 +291,15 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         label: "Terminal",
         menu: {
           items: [
-            ...props.projectScripts.map((script) => ({
+            ...(props.workspaceOwnedElsewhere ? [] : props.projectScripts).map((script) => ({
               description: script.command,
+              disabled: !props.canOperateTerminal,
               icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
               label: projectScriptMenuLabel(script),
               onPress: () => void props.onRunProjectScript(script),
               type: "action" as const,
             })),
-            ...(props.projectScripts.length === 0
+            ...(props.projectScripts.length === 0 && !props.workspaceOwnedElsewhere
               ? [
                   {
                     description: "This project has no saved scripts yet",
@@ -299,6 +328,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
             })),
             {
               description: "Start another shell for this thread",
+              disabled: !props.canOperateTerminal,
               icon: { name: "plus", type: "sfSymbol" },
               label: "Open new terminal",
               onPress: props.onOpenNewTerminal,
@@ -395,6 +425,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       model.runQuickAction,
       props.canOpenFiles,
       props.canOpenTerminal,
+      props.canOperateTerminal,
       props.gitStatus,
       props.onMergeBack,
       props.onOpenNewTerminal,
@@ -409,16 +440,22 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(
-    () => [actionItems.git, actionItems.files, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      (props.workspaceOwnedElsewhere
+        ? [actionItems.files, actionItems.terminal]
+        : [actionItems.git, actionItems.files, actionItems.terminal]) as HeaderItems,
+    [actionItems, props.workspaceOwnedElsewhere],
   );
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(
-    () => [actionItems.files, actionItems.git, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      (props.workspaceOwnedElsewhere
+        ? [actionItems.files, actionItems.terminal]
+        : [actionItems.files, actionItems.git, actionItems.terminal]) as HeaderItems,
+    [actionItems, props.workspaceOwnedElsewhere],
   );
 }
 
@@ -447,11 +484,12 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           disabled={!props.canOpenTerminal}
           separateBackground
         >
-          {props.projectScripts.length > 0 ? (
+          {props.workspaceOwnedElsewhere ? null : props.projectScripts.length > 0 ? (
             props.projectScripts.map((script) => (
               <NativeHeaderToolbar.MenuAction
                 key={script.id}
                 icon={projectScriptMenuIcon(script.icon)}
+                disabled={!props.canOperateTerminal}
                 onPress={() => void props.onRunProjectScript(script)}
                 subtitle={script.command}
               >
@@ -490,6 +528,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           ))}
           <NativeHeaderToolbar.MenuAction
             icon="plus"
+            disabled={!props.canOperateTerminal}
             onPress={props.onOpenNewTerminal}
             subtitle="Start another shell for this thread"
           >
@@ -506,7 +545,9 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           separateBackground
         />
       ) : null}
-      {showActionControls ? createNativeHeaderMenu(threadGitMenuDefinition(props, model)) : null}
+      {showActionControls && !props.workspaceOwnedElsewhere
+        ? createNativeHeaderMenu(threadGitMenuDefinition(props, model))
+        : null}
     </NativeHeaderToolbar>
   );
 }
@@ -523,7 +564,8 @@ export function ThreadGitMenu(props: ThreadGitMenuProps) {
 
 /** Returns menu data because native toolbars serialize direct items rather than rendering component children. */
 export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): ScreenHeaderMenu | null {
-  return threadGitMenuDefinition(props, useThreadGitControlModel(props));
+  const model = useThreadGitControlModel(props);
+  return props.workspaceOwnedElsewhere ? null : threadGitMenuDefinition(props, model);
 }
 
 function threadGitMenuDefinition(
