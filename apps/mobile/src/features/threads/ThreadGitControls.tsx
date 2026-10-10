@@ -94,6 +94,11 @@ export type ThreadGitMenuProps = {
   readonly onMergeBack?: () => void;
   readonly onPull: () => Promise<void>;
   readonly onRunAction: (input: GitActionRequestInput) => Promise<GitRunStackedActionResult | null>;
+  /**
+   * The thread mirrors a session running outside T3 (claude in a terminal),
+   * which owns its folder: no Git actions or project scripts are offered.
+   */
+  readonly workspaceOwnedElsewhere?: boolean;
 };
 
 type ThreadGitControlsProps = ThreadGitMenuProps & {
@@ -286,7 +291,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         label: "Terminal",
         menu: {
           items: [
-            ...props.projectScripts.map((script) => ({
+            ...(props.workspaceOwnedElsewhere ? [] : props.projectScripts).map((script) => ({
               description: script.command,
               disabled: !props.canOperateTerminal,
               icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
@@ -294,7 +299,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
               onPress: () => void props.onRunProjectScript(script),
               type: "action" as const,
             })),
-            ...(props.projectScripts.length === 0
+            ...(props.projectScripts.length === 0 && !props.workspaceOwnedElsewhere
               ? [
                   {
                     description: "This project has no saved scripts yet",
@@ -435,16 +440,22 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(
-    () => [actionItems.git, actionItems.files, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      (props.workspaceOwnedElsewhere
+        ? [actionItems.files, actionItems.terminal]
+        : [actionItems.git, actionItems.files, actionItems.terminal]) as HeaderItems,
+    [actionItems, props.workspaceOwnedElsewhere],
   );
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(
-    () => [actionItems.files, actionItems.git, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      (props.workspaceOwnedElsewhere
+        ? [actionItems.files, actionItems.terminal]
+        : [actionItems.files, actionItems.git, actionItems.terminal]) as HeaderItems,
+    [actionItems, props.workspaceOwnedElsewhere],
   );
 }
 
@@ -473,7 +484,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           disabled={!props.canOpenTerminal}
           separateBackground
         >
-          {props.projectScripts.length > 0 ? (
+          {props.workspaceOwnedElsewhere ? null : props.projectScripts.length > 0 ? (
             props.projectScripts.map((script) => (
               <NativeHeaderToolbar.MenuAction
                 key={script.id}
@@ -534,7 +545,9 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           separateBackground
         />
       ) : null}
-      {showActionControls ? createNativeHeaderMenu(threadGitMenuDefinition(props, model)) : null}
+      {showActionControls && !props.workspaceOwnedElsewhere
+        ? createNativeHeaderMenu(threadGitMenuDefinition(props, model))
+        : null}
     </NativeHeaderToolbar>
   );
 }
@@ -551,7 +564,8 @@ export function ThreadGitMenu(props: ThreadGitMenuProps) {
 
 /** Returns menu data because native toolbars serialize direct items rather than rendering component children. */
 export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): ScreenHeaderMenu | null {
-  return threadGitMenuDefinition(props, useThreadGitControlModel(props));
+  const model = useThreadGitControlModel(props);
+  return props.workspaceOwnedElsewhere ? null : threadGitMenuDefinition(props, model);
 }
 
 function threadGitMenuDefinition(

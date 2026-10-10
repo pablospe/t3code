@@ -50,6 +50,7 @@ export function useReviewHeaderPresentation(props: {
     gitOperationLabel: gitState.gitOperationLabel,
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
+    workspaceOwnedElsewhere: selectedThread?.source.externalSession != null,
   });
   return {
     title: props.title,
