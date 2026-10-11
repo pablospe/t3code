@@ -160,8 +160,7 @@ import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain"
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
-import * as AttachedSessions from "./attachedSessions/AttachedSessions.ts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as AttachedSessionsLayers from "./attachedSessions/AttachedSessionsLayers.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
@@ -572,24 +571,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerPullRequestService),
     Layer.provide(ProjectionStoreV2.layer),
   ),
-  // Mirrors Claude CLI sessions running in a terminal while
-  // `enableAttachedSessions` is on.
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const service = yield* AttachedSessions.AttachedSessions;
-      yield* service.start();
-    }),
-  ).pipe(
-    Layer.provide(AttachedSessions.layer),
-    Layer.provide(
-      Layer.mergeAll(
-        RuntimeLayer.layerEventSink,
-        ProjectionStoreV2.layer,
-        IdAllocator.layer,
-        RuntimeLayer.layerClaudeAgentsRoster,
-      ),
-    ),
-  ),
+  AttachedSessionsLayers.layerDaemon.pipe(Layer.provide(RuntimeLayer.layerEventSink)),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   ProviderUsageLimitsIngestion.layer,

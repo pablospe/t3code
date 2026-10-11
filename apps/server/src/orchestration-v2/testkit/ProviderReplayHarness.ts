@@ -52,7 +52,7 @@ import * as ThreadTitleRegenerationService from "../ThreadTitleRegenerationServi
 import * as RuntimePolicy from "../RuntimePolicy.ts";
 import * as TurnItemPositionStore from "../TurnItemPositionStore.ts";
 import * as RuntimeRequestService from "../RuntimeRequestService.ts";
-import * as AttachedSessionSender from "../../attachedSessions/AttachedSessionSender.ts";
+import * as AttachedSessionsLayers from "../../attachedSessions/AttachedSessionsLayers.ts";
 import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
 import * as ThreadForkService from "../ThreadForkService.ts";
 import {
@@ -273,8 +273,7 @@ export function layerWithRegistry<Error>(
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
-    /** Stands in for the Agent SDK relay behind external-session message sends. */
-    readonly attachedSessionDeliver?: AttachedSessionSender.AttachedSessionDeliver;
+    readonly attachedSessionDeliver?: AttachedSessionsLayers.ReplayDeliver;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -490,11 +489,8 @@ export function layerWithRegistry<Error>(
         layerThreadTitleRegenerationTest,
         layerServerSettings,
         layerThreadManagementProvided,
-        AttachedSessionSender.layerWithDeliver(
-          options.attachedSessionDeliver ??
-            (() => Effect.die("This replay does not expect an external-session send.")),
-        ).pipe(
-          Layer.provide(Layer.mergeAll(layerStores, layerEventSinkProvided, IdAllocator.layer)),
+        AttachedSessionsLayers.layerSenderForReplay(options.attachedSessionDeliver).pipe(
+          Layer.provide(Layer.merge(layerStores, layerEventSinkProvided)),
         ),
       ),
     ),
