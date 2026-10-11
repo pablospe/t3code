@@ -1,3 +1,4 @@
+import { terminalStatusPill } from "./externalSessionStatus.logic";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -973,14 +974,8 @@ export function shouldRecedeSidebarThread(input: {
   isActive: boolean;
   isSelected: boolean;
 }): boolean {
-  if (
-    input.isActive ||
-    input.isSelected ||
-    input.status === "input" ||
-    input.status === "terminal"
-  ) {
-    return false;
-  }
+  if (input.status === "terminal") return false;
+  if (input.isActive || input.isSelected || input.status === "input") return false;
   if (input.status === "working" || input.status === "waiting") return true;
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
@@ -991,9 +986,7 @@ export function shouldRecedeSidebarThread(input: {
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
-> & {
-  externalSessionWaiting?: SidebarThreadSummary["externalSessionWaiting"] | undefined;
-};
+> & { externalSessionWaiting?: SidebarThreadSummary["externalSessionWaiting"] | undefined };
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
@@ -1002,11 +995,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.hasPendingUserInput) {
     return "input";
   }
-  // A mirrored terminal session needs its user in the terminal; its runtime
-  // still says "waiting", which would otherwise read as working.
-  if (thread.externalSessionWaiting) {
-    return "terminal";
-  }
+  if (thread.externalSessionWaiting) return "terminal"; // a mirrored terminal session
   if (
     thread.runtime !== null &&
     ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
@@ -1050,9 +1039,7 @@ export function resolveSidebarV2TopStatus(input: {
   if (input.status === "input") {
     return "input";
   }
-  if (input.status === "terminal") {
-    return "terminal";
-  }
+  if (input.status === "terminal") return "terminal";
   if (input.status === "failed" || input.status === "limited") {
     return input.status;
   }
@@ -1208,18 +1195,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  // A mirrored terminal session needs its user in the terminal, not here.
-  if (thread.externalSessionWaiting) {
-    return {
-      label: "Waiting in terminal",
-      colorClass: "text-indigo-600 dark:text-indigo-300/90",
-      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
-      pulse: false,
-      ...(thread.externalSessionWaiting.reason === null
-        ? {}
-        : { tooltip: `Waiting in terminal: ${thread.externalSessionWaiting.reason}` }),
-    };
-  }
+  if (thread.externalSessionWaiting) return terminalStatusPill(thread.externalSessionWaiting);
 
   if (thread.runtime?.status === "running" || thread.runtime?.status === "waiting") {
     return {
