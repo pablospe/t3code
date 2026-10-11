@@ -27,3 +27,13 @@ export const TERMINAL_ROW_STATUS = {
   icon: "terminal" as const,
   className: "text-indigo-600 dark:text-indigo-300",
 };
+
+/**
+ * Notification key and title for a terminal session waiting for its user. The
+ * key is constant, so one alert fires on entering waiting and none while it
+ * keeps waiting, even if the reason changes.
+ */
+export const TERMINAL_ATTENTION = "terminal";
+export function terminalNotificationTitle(waiting: ExternalSessionWaiting | null): string {
+  return waiting?.reason ? `Waiting in terminal: ${waiting.reason}` : "Waiting in terminal";
+}
