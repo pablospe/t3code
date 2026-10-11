@@ -75,3 +75,25 @@ export function ExternalSessionComposer(props: {
     </View>
   );
 }
+
+/** The composer slot on the thread screen, padded like the bar it stands beside. */
+export function ExternalSessionComposerSlot(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly externalSession: OrchestrationV2ExternalSession;
+  readonly maxWidth: number | undefined;
+  readonly bottomInset: number;
+}) {
+  return (
+    <View
+      className="self-center px-3 pt-1.5"
+      style={{ width: "100%", maxWidth: props.maxWidth, paddingBottom: props.bottomInset + 6 }}
+    >
+      <ExternalSessionComposer
+        environmentId={props.environmentId}
+        threadId={props.threadId}
+        activity={props.externalSession.activity}
+      />
+    </View>
+  );
+}

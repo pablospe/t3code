@@ -122,7 +122,7 @@ import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
-import { ExternalSessionComposer } from "./ExternalSessionComposer";
+import { ExternalSessionComposerSlot } from "./ExternalSessionComposer";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
@@ -1421,20 +1421,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       />
                     </View>
                   ) : externalSession !== null ? (
-                    <View
-                      className="self-center px-3 pt-1.5"
-                      style={{
-                        width: "100%",
-                        maxWidth: contentMaxWidth,
-                        paddingBottom: composerBottomInset + 6,
-                      }}
-                    >
-                      <ExternalSessionComposer
-                        environmentId={props.environmentId}
-                        threadId={props.selectedThread.id}
-                        activity={externalSession.activity}
-                      />
-                    </View>
+                    <ExternalSessionComposerSlot
+                      environmentId={props.environmentId}
+                      threadId={props.selectedThread.id}
+                      externalSession={externalSession}
+                      maxWidth={contentMaxWidth}
+                      bottomInset={composerBottomInset}
+                    />
                   ) : (
                     <>
                       <ThreadComposer
