@@ -1,3 +1,4 @@
+import { TERMINAL_ROW_STATUS } from "./externalSessionStatus.logic";
 import { type EnvironmentId } from "@t3tools/contracts";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
@@ -1266,11 +1267,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarThreadStatus(thread);
   const isInFlight =
-    status === "working" ||
-    status === "waiting" ||
-    status === "approval" ||
-    status === "input" ||
-    status === "terminal";
+    status === "working" || status === "waiting" || status === "approval" || status === "input";
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
   // an explicit act, so the pill clears only when the user re-engages:
@@ -1297,7 +1294,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
-  const topStatus =
+  const upstreamTopStatus =
     status === "working"
       ? {
           // A native /goal keeps the agent going across turns until it is met.
@@ -1327,39 +1324,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 icon: "input" as const,
                 className: "text-indigo-600 dark:text-indigo-300",
               }
-            : status === "terminal"
+            : status === "limited"
               ? {
-                  // The reason is on the thread's status line; this slot
-                  // gives way to row controls on hover, so it has no tooltip.
-                  label: "Waiting in terminal",
-                  icon: "terminal" as const,
-                  className: "text-indigo-600 dark:text-indigo-300",
+                  label: "Limited",
+                  icon: "failed" as const,
+                  className: "text-warning",
                 }
-              : status === "limited"
+              : status === "failed"
                 ? {
-                    label: "Limited",
+                    label: "Failed",
                     icon: "failed" as const,
-                    className: "text-warning",
+                    className: "text-error",
                   }
-                : status === "failed"
+                : isWoke
                   ? {
-                      label: "Failed",
-                      icon: "failed" as const,
-                      className: "text-error",
+                      label: "Woke",
+                      icon: "woke" as const,
+                      className: "text-warning",
                     }
-                  : isWoke
+                  : isUnread
                     ? {
-                        label: "Woke",
-                        icon: "woke" as const,
-                        className: "text-warning",
+                        label: "Done",
+                        icon: "done" as const,
+                        className: "text-success",
                       }
-                    : isUnread
-                      ? {
-                          label: "Done",
-                          icon: "done" as const,
-                          className: "text-success",
-                        }
-                      : null;
+                    : null;
+  const topStatus = status === "terminal" ? TERMINAL_ROW_STATUS : upstreamTopStatus;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({

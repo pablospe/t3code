@@ -15,6 +15,21 @@ import { Textarea } from "../ui/textarea";
  * session, and it shows in the thread once the session records it.
  */
 export function ExternalSessionComposer(props: {
+  /** The open thread; nothing renders unless it mirrors an external session. */
+  readonly thread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | undefined;
+  readonly externalSession: OrchestrationV2ExternalSession | null;
+}) {
+  if (props.thread === undefined || props.externalSession === null) return null;
+  return (
+    <ExternalSessionComposerForm
+      environmentId={props.thread.environmentId}
+      threadId={props.thread.id}
+      activity={props.externalSession.activity}
+    />
+  );
+}
+
+function ExternalSessionComposerForm(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly activity: OrchestrationV2ExternalSession["activity"];
@@ -91,4 +106,26 @@ export function ExternalSessionComposer(props: {
       </form>
     </div>
   );
+}
+
+/** The external-session marker of the open thread; the projection is fresher than the shell. */
+export function threadExternalSession(
+  projection:
+    | {
+        readonly thread: {
+          readonly externalSession?: OrchestrationV2ExternalSession | null | undefined;
+        };
+      }
+    | null
+    | undefined,
+  shell:
+    | {
+        readonly source: {
+          readonly externalSession?: OrchestrationV2ExternalSession | null | undefined;
+        };
+      }
+    | null
+    | undefined,
+): OrchestrationV2ExternalSession | null {
+  return projection?.thread.externalSession ?? shell?.source.externalSession ?? null;
 }

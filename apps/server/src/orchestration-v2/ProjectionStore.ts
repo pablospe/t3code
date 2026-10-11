@@ -33,7 +33,6 @@ import type {
   OrchestrationV2TurnItem,
   ProviderInstanceId,
   ProviderSessionId,
-  ProviderDriverKind,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
@@ -69,6 +68,7 @@ import {
   isOrchestrationV2SupersededInterrupt,
 } from "@t3tools/shared/orchestrationV2Timeline";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { externalSessionShellFields } from "../attachedSessions/ExternalSessionProjection.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -357,17 +357,6 @@ export interface ProjectionStoreV2Shape {
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
   ) => Effect.Effect<number, ProjectionStoreV2Error>;
-  /**
-   * The app thread whose provider thread runs this native thread (a Claude
-   * session id, for example), if any. Matches the id derived from the native
-   * id and the native ref a run records once it learns the id, since a run's
-   * provider thread keeps the id it was given while still pending.
-   */
-  readonly getNativeThreadOwner: (input: {
-    readonly driver: ProviderDriverKind;
-    readonly nativeThreadId: string;
-    readonly derivedProviderThreadId: ProviderThreadId;
-  }) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
   /** One persisted turn item, or null when the thread has no such item. */
   readonly getTurnItem: (input: {
     readonly threadId: ThreadId;
@@ -1493,9 +1482,7 @@ export function threadShellFromProjection(
     ...(projection.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: projection.thread.historyOrigin }),
-    ...(projection.thread.externalSession == null
-      ? {}
-      : { externalSession: projection.thread.externalSession }),
+    ...externalSessionShellFields(projection.thread),
     latestRunId: latestRun?.id ?? null,
     latestRunRequestedAt: latestRun?.requestedAt ?? null,
     latestRunStartedAt: latestRun?.startedAt ?? null,
@@ -1770,9 +1757,7 @@ function shellFromState(input: {
     ...(input.state.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: input.state.thread.historyOrigin }),
-    ...(input.state.thread.externalSession == null
-      ? {}
-      : { externalSession: input.state.thread.externalSession }),
+    ...externalSessionShellFields(input.state.thread),
     latestRunId: input.state.latestRunId,
     latestRunRequestedAt: input.state.latestRunRequestedAt,
     latestRunStartedAt: input.state.latestRunStartedAt,
@@ -4718,17 +4703,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError(controlReadError(threadId)),
       );
 
-    const getNativeThreadOwner: ProjectionStoreV2Shape["getNativeThreadOwner"] = (input) =>
-      sql<{ thread_id: string }>`SELECT thread_id
-        FROM orchestration_v2_projection_provider_threads
-        WHERE provider_thread_id = ${input.derivedProviderThreadId}
-          OR (driver = ${input.driver}
-            AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${input.nativeThreadId})
-        LIMIT 1`.pipe(
-        Effect.map((rows) => (rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id))),
-        Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
-      );
-
     const getTurnItem: ProjectionStoreV2Shape["getTurnItem"] = ({ threadId, itemId }) =>
       sql<{ payload_json: string }>`SELECT payload_json
         FROM orchestration_v2_projection_turn_items
@@ -5981,7 +5955,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       hasUnpairedRunInterruptRequest,
       getMessageCount,
       getNextTurnItemOrdinal,
-      getNativeThreadOwner,
       getTurnItem,
       getThreadRecords,
       getRuntimeRequest,
@@ -6248,20 +6221,6 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               (state.projections
                 .get(threadId)
                 ?.turnItems.reduce((max, item) => Math.max(max, item.ordinal), 0) ?? 0) + 1,
-          ),
-        ),
-      getNativeThreadOwner: (input) =>
-        Ref.get(replayState).pipe(
-          Effect.map(
-            (state) =>
-              [...state.projections.values()].find((projection) =>
-                projection.providerThreads.some(
-                  (thread) =>
-                    thread.id === input.derivedProviderThreadId ||
-                    (thread.driver === input.driver &&
-                      thread.nativeThreadRef?.nativeId === input.nativeThreadId),
-                ),
-              )?.thread.id ?? null,
           ),
         ),
       getTurnItem: ({ threadId, itemId }) =>

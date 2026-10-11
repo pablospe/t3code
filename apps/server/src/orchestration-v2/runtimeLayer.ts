@@ -27,9 +27,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import * as AttachedSessionSender from "../attachedSessions/AttachedSessionSender.ts";
-import * as ClaudeAgentsRoster from "../attachedSessions/ClaudeAgentsRoster.ts";
-import * as ProcessRunner from "../processRunner.ts";
+import * as AttachedSessionsLayers from "../attachedSessions/AttachedSessionsLayers.ts";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -292,19 +290,6 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
     Layer.mergeAll(layerThreadManagementProvided, ProjectStore.layer, TextGeneration.layer),
   ),
 );
-export const layerClaudeAgentsRoster = ClaudeAgentsRoster.layer.pipe(
-  Layer.provide(ProcessRunner.layer),
-);
-const layerAttachedSessionSenderProvided = AttachedSessionSender.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      layerEventSinkProvided,
-      IdAllocator.layer,
-      ProjectionStore.layer,
-      layerClaudeAgentsRoster,
-    ),
-  ),
-);
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -316,7 +301,7 @@ const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
       layerRuntimeRequestServiceProvided,
       layerThreadTitleRegenerationProvided,
       layerThreadManagementProvided,
-      layerAttachedSessionSenderProvided,
+      AttachedSessionsLayers.layerSender.pipe(Layer.provide(layerEventSinkProvided)),
     ),
   ),
 );

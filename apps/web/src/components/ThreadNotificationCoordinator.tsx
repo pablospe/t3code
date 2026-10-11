@@ -22,6 +22,7 @@ import {
   setNotificationBadge,
   unlockNotificationAudio,
 } from "../threadNotifications";
+import { TERMINAL_ATTENTION, terminalNotificationTitle } from "./externalSessionStatus.logic";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 import { toastManager } from "./ui/toast";
 
@@ -134,14 +135,11 @@ function EnvironmentNotifications({
       const thread = presentThreadShell(environmentId, rawThread);
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
-      const attention =
+      const upstreamAttention =
         status === "input" || status === "approval" || status === "failed" || status === "limited"
           ? `${thread.latestRun?.runId ?? ""}:${status}`
-          : // A mirrored terminal session: one alert for entering waiting,
-            // none while it keeps waiting, even if the reason changes.
-            status === "terminal"
-            ? "terminal"
-            : null;
+          : null;
+      const attention = status === "terminal" ? TERMINAL_ATTENTION : upstreamAttention;
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       // Commands left running (a dev server) read as ready; subagents and monitors wait.
       const completion =
@@ -159,20 +157,20 @@ function EnvironmentNotifications({
             ? "completion"
             : null;
       if (!kind) continue;
-      const title =
+      const upstreamTitle =
         kind === "completion"
           ? "Thread completed"
-          : status === "terminal"
-            ? thread.externalSessionWaiting?.reason
-              ? `Waiting in terminal: ${thread.externalSessionWaiting.reason}`
-              : "Waiting in terminal"
-            : status === "approval"
-              ? "Approval needed"
-              : status === "limited"
-                ? "Usage limit reached"
-                : status === "failed"
-                  ? "Thread failed"
-                  : "Input needed";
+          : status === "approval"
+            ? "Approval needed"
+            : status === "limited"
+              ? "Usage limit reached"
+              : status === "failed"
+                ? "Thread failed"
+                : "Input needed";
+      const title =
+        kind !== "completion" && status === "terminal"
+          ? terminalNotificationTitle(thread.externalSessionWaiting)
+          : upstreamTitle;
       if (hasNotificationSound(mode)) {
         void playNotificationSound(kind, () =>
           hasNotificationSound(getClientSettings().notificationMode),
