@@ -48,6 +48,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as LegacyV1ThreadImporter from "../orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ExternalSessionProjection from "./ExternalSessionProjection.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -142,6 +143,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const eventSink = yield* EventSink.EventSinkV2;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+    const ownership = yield* ExternalSessionProjection.ExternalSessionOwnership;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const projects = yield* ProjectService.ProjectService;
     const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
@@ -686,7 +688,7 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
 
     const isOwnedByT3 = Effect.fn("AttachedSessions.isOwnedByT3")(function* (sessionId: string) {
       if (ownedByT3.has(sessionId)) return true;
-      const owner = yield* projectionStore.getNativeThreadOwner({
+      const owner = yield* ownership.getNativeThreadOwner({
         driver: CLAUDE_DRIVER,
         nativeThreadId: sessionId,
         derivedProviderThreadId: IdAllocator.deriveProviderThread({
@@ -858,6 +860,8 @@ const makeAttachedSessions = (options?: AttachedSessionsLiveOptions) =>
   });
 
 export const makeLayer = (options?: AttachedSessionsLiveOptions) =>
-  Layer.effect(AttachedSessions, makeAttachedSessions(options));
+  Layer.effect(AttachedSessions, makeAttachedSessions(options)).pipe(
+    Layer.provide(ExternalSessionProjection.layer),
+  );
 
 export const layer = makeLayer();
